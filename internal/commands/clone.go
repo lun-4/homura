@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -73,6 +74,7 @@ func copyDir(src, dst string) error {
 	}
 
 	// Create destination directory
+	slog.Info("creating directory", "path", dst)
 	if err := os.MkdirAll(dst, srcInfo.Mode()); err != nil {
 		return err
 	}
@@ -89,6 +91,7 @@ func copyDir(src, dst string) error {
 
 		// Skip .homura directory to avoid recursive copy
 		if entry.Name() == ".homura" && filepath.Dir(srcPath) == src {
+			slog.Info("skipping .homura directory")
 			continue
 		}
 
@@ -115,6 +118,8 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
+
+	slog.Info("copying file", "src", src, "dst", dst, "size", srcInfo.Size())
 
 	// Open source file
 	srcFile, err := os.Open(src)
