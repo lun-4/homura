@@ -34,3 +34,4 @@ go.work.sum
 # Homura specific
 /homura
 .homura/
+.claude/
