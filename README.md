@@ -1,66 +1,49 @@
 # homura
 
-A CLI tool for managing temporary git repository copies for isolated development work.
+claude code web for terminal addicts that also really don't want to deal with git submodules or worktrees
 
-## Installation
+_lol_
 
-```bash
+## how get
+
+```sh
+git clone https://github.com/lun-4/homura
+cd homura
 go build -o homura ./cmd/homura
+
+# do whatever you want
+mv ./homura ~/.local/bin
 ```
 
-Then move the binary to somewhere in your PATH:
-```bash
-sudo mv homura /usr/local/bin/
-```
+## how use
 
-## Usage
+```sh
+cd shit
 
-### Clone a repository
+# copy current cwd to .homura/fix-indices/
+homura clone fix-indices
 
-Copy the current repo to `.homura/<branch-name>/`, including all uncommitted changes:
-
-```bash
-homura clone <branch-name>
-```
-
-This will:
-- Create a full recursive copy including the .git directory
-- Include all uncommitted changes
-- Checkout to `<branch-name>` in the copy (creates the branch if it doesn't exist)
-- Set this as the default branch
-
-### Open a shell in a copy
-
-```bash
-homura sh [branch-name]
-```
-
-If `branch-name` is not provided, uses the default branch.
-
-### Remove a copy
-
-```bash
-homura rm [branch-name]
-```
-
-If `branch-name` is not provided, uses the default branch.
-
-If there are uncommitted changes, you'll need to use the `-f` flag:
-
-```bash
-homura rm [branch-name] -f
-```
-
-### List all copies
-
-```bash
+# list all branches. you can create more than one concurrently
 homura ls
+
+# running `homura clone` sets a default branch to the newly created one.
+homura sh [branch]
+
+# in the inner shell, you can do whatever you want.
+# it's a full clone of your cwd but in a folder inside <repo>/.homura
+# and that includes running multiple copies of claude
+claude
+
+# since its a full copy of cwd, that includes committing, pushing, etc.
+# should all work in the inner "clone"
+git add ...
+git commit ...
+git push ...
+
+# exit the homura shell, putting you back to your main shell
+exit
+
+# remove the default branch
+# if there are uncomitted changes, this will fail unless you add `-f`
+homura rm
 ```
-
-Shows all branch copies and indicates which one is the default.
-
-## How it works
-
-- **Storage**: Repo copies are stored at `<original-repo>/.homura/<branch-name>/`
-- **State tracking**: Per-repo state is stored at `<original-repo>/.homura/state.db` (SQLite database)
-- **Default branch**: After cloning, the branch becomes the "default" so it's optional for `sh` and `rm` commands
