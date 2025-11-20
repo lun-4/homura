@@ -62,5 +62,5 @@ Shows all branch copies and indicates which one is the default.
 ## How it works
 
 - **Storage**: Repo copies are stored at `<original-repo>/.homura/<branch-name>/`
-- **State tracking**: Per-repo state is stored at `<original-repo>/.homura/state.toml`
+- **State tracking**: Per-repo state is stored at `<original-repo>/.homura/state.db` (SQLite database)
 - **Default branch**: After cloning, the branch becomes the "default" so it's optional for `sh` and `rm` commands
