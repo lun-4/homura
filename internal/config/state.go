@@ -1,24 +1,42 @@
 package config
 
 import (
+	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 
-	"github.com/pelletier/go-toml/v2"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // RepoState tracks per-repository state
 type RepoState struct {
-	DefaultBranch string `toml:"default_branch"`
+	DefaultBranch string
 }
 
-// GetStateFilePath returns the path to the state file for the current repo
+// GetStateFilePath returns the path to the state database for the current repo
 func GetStateFilePath(repoRoot string) string {
-	return filepath.Join(repoRoot, ".homura", "state.toml")
+	return filepath.Join(repoRoot, ".homura", "state.db")
 }
 
-// LoadState loads the state file for the current repo
+// initDB initializes the database schema if it doesn't exist
+func initDB(db *sql.DB) error {
+	schema := `
+	CREATE TABLE IF NOT EXISTS state (
+		key TEXT PRIMARY KEY,
+		value TEXT
+	);
+	`
+	slog.Info("initializing database schema")
+	_, err := db.Exec(schema)
+	if err != nil {
+		return fmt.Errorf("failed to create schema: %w", err)
+	}
+	return nil
+}
+
+// LoadState loads the state from the database for the current repo
 func LoadState(repoRoot string) (*RepoState, error) {
 	statePath := GetStateFilePath(repoRoot)
 
@@ -27,20 +45,33 @@ func LoadState(repoRoot string) (*RepoState, error) {
 		return &RepoState{}, nil
 	}
 
-	data, err := os.ReadFile(statePath)
+	slog.Info("opening state database", "path", statePath)
+	db, err := sql.Open("sqlite3", statePath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read state file: %w", err)
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+	defer db.Close()
+
+	// Initialize schema
+	if err := initDB(db); err != nil {
+		return nil, err
 	}
 
-	var state RepoState
-	if err := toml.Unmarshal(data, &state); err != nil {
-		return nil, fmt.Errorf("failed to parse state file: %w", err)
+	// Query default branch
+	var defaultBranch string
+	err = db.QueryRow("SELECT value FROM state WHERE key = ?", "default_branch").Scan(&defaultBranch)
+	if err == sql.ErrNoRows {
+		return &RepoState{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to query default branch: %w", err)
 	}
 
-	return &state, nil
+	slog.Info("loaded state from database", "default_branch", defaultBranch)
+	return &RepoState{DefaultBranch: defaultBranch}, nil
 }
 
-// SaveState saves the state file for the current repo
+// SaveState saves the state to the database for the current repo
 func SaveState(repoRoot string, state *RepoState) error {
 	statePath := GetStateFilePath(repoRoot)
 
@@ -50,13 +81,23 @@ func SaveState(repoRoot string, state *RepoState) error {
 		return fmt.Errorf("failed to create .homura directory: %w", err)
 	}
 
-	data, err := toml.Marshal(state)
+	slog.Info("opening state database", "path", statePath)
+	db, err := sql.Open("sqlite3", statePath)
 	if err != nil {
-		return fmt.Errorf("failed to marshal state: %w", err)
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+	defer db.Close()
+
+	// Initialize schema
+	if err := initDB(db); err != nil {
+		return err
 	}
 
-	if err := os.WriteFile(statePath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write state file: %w", err)
+	// Insert or replace default branch
+	slog.Info("saving state to database", "default_branch", state.DefaultBranch)
+	_, err = db.Exec("INSERT OR REPLACE INTO state (key, value) VALUES (?, ?)", "default_branch", state.DefaultBranch)
+	if err != nil {
+		return fmt.Errorf("failed to save default branch: %w", err)
 	}
 
 	return nil
