@@ -2,6 +2,9 @@
 
 claude code web for terminal addicts that also really don't want to deal with git submodules or worktrees
 
+(also because CC web does not support setting a docker image as env, and installing Elixir on it was a horror experience
+which also didn't work. so fuck it)
+
 _lol_
 
 ## how get
@@ -47,3 +50,10 @@ exit
 # if there are uncomitted changes, this will fail unless you add `-f`
 homura rm
 ```
+
+## drawbacks
+
+- they are full copies, so work done on them must be synced via a git remote.
+   you may be able to do `git remote add <NAME> <PATH>` and then merge locallly
+   without having to go through your forge of choice.
+   this may be a default `homura` command, don't know how well i'd use that yet.
