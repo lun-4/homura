@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/yourusername/homura/internal/commands"
+	"github.com/lun-4/homura/internal/commands"
 )
 
 var (

@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/yourusername/homura/internal/config"
-	"github.com/yourusername/homura/internal/git"
+	"github.com/lun-4/homura/internal/config"
+	"github.com/lun-4/homura/internal/git"
 )
 
 // Clone copies the current repository to .homura/<branch-name>/

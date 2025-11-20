@@ -1,4 +1,4 @@
-module github.com/yourusername/homura
+module github.com/lun-4/homura
 
 go 1.24.7
 
