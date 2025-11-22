@@ -95,7 +95,13 @@ func copyDir(src, dst string) error {
 			continue
 		}
 
-		if entry.IsDir() {
+		// Use os.Stat to follow symlinks and check actual target type
+		info, err := os.Stat(srcPath)
+		if err != nil {
+			return err
+		}
+
+		if info.IsDir() {
 			// Recursively copy subdirectory
 			if err := copyDir(srcPath, dstPath); err != nil {
 				return err
