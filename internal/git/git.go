@@ -85,3 +85,71 @@ func GetHomuraDir(repoRoot string) string {
 func GetCopyPath(repoRoot, branchName string) string {
 	return filepath.Join(GetHomuraDir(repoRoot), branchName)
 }
+
+// WorktreeAdd creates a new git worktree at the specified path with a new branch
+func WorktreeAdd(repoPath, worktreePath, branchName string) error {
+	cmd := exec.Command("git", "worktree", "add", "-b", branchName, worktreePath)
+	cmd.Dir = repoPath
+	slog.Info("running git command", "cmd", "git", "args", cmd.Args[1:], "dir", repoPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to create worktree: %s: %w", string(output), err)
+	}
+	return nil
+}
+
+// WorktreeAddExisting creates a new git worktree for an existing branch
+func WorktreeAddExisting(repoPath, worktreePath, branchName string) error {
+	cmd := exec.Command("git", "worktree", "add", worktreePath, branchName)
+	cmd.Dir = repoPath
+	slog.Info("running git command", "cmd", "git", "args", cmd.Args[1:], "dir", repoPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to create worktree: %s: %w", string(output), err)
+	}
+	return nil
+}
+
+// WorktreeRemove removes a git worktree
+func WorktreeRemove(repoPath, worktreePath string, force bool) error {
+	args := []string{"worktree", "remove", worktreePath}
+	if force {
+		args = append(args, "--force")
+	}
+	cmd := exec.Command("git", args...)
+	cmd.Dir = repoPath
+	slog.Info("running git command", "cmd", "git", "args", cmd.Args[1:], "dir", repoPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to remove worktree: %s: %w", string(output), err)
+	}
+	return nil
+}
+
+// WorktreeList returns a list of all worktrees
+func WorktreeList(repoPath string) ([]string, error) {
+	cmd := exec.Command("git", "worktree", "list", "--porcelain")
+	cmd.Dir = repoPath
+	slog.Info("running git command", "cmd", "git", "args", cmd.Args[1:], "dir", repoPath)
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list worktrees: %w", err)
+	}
+
+	var worktrees []string
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "worktree ") {
+			worktrees = append(worktrees, strings.TrimPrefix(line, "worktree "))
+		}
+	}
+	return worktrees, nil
+}
+
+// BranchExists checks if a branch exists
+func BranchExists(repoPath, branchName string) bool {
+	cmd := exec.Command("git", "rev-parse", "--verify", branchName)
+	cmd.Dir = repoPath
+	slog.Info("running git command", "cmd", "git", "args", cmd.Args[1:], "dir", repoPath)
+	return cmd.Run() == nil
+}

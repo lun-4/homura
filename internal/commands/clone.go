@@ -2,16 +2,13 @@ package commands
 
 import (
 	"fmt"
-	"io"
-	"log/slog"
 	"os"
-	"path/filepath"
 
 	"github.com/lun-4/homura/internal/config"
 	"github.com/lun-4/homura/internal/git"
 )
 
-// Clone copies the current repository to .homura/<branch-name>/
+// Clone creates a new git worktree in .homura/<branch-name>/
 func Clone(branchName string) error {
 	// Get current working directory
 	cwd, err := os.Getwd()
@@ -28,9 +25,9 @@ func Clone(branchName string) error {
 	// Get destination path
 	destPath := git.GetCopyPath(repoRoot, branchName)
 
-	// Check if copy already exists
+	// Check if worktree already exists
 	if _, err := os.Stat(destPath); err == nil {
-		return fmt.Errorf("copy already exists at %s", destPath)
+		return fmt.Errorf("worktree already exists at %s", destPath)
 	}
 
 	// Create .homura directory if it doesn't exist
@@ -39,16 +36,19 @@ func Clone(branchName string) error {
 		return fmt.Errorf("failed to create .homura directory: %w", err)
 	}
 
-	// Copy the repository recursively
-	fmt.Printf("Copying repository to %s...\n", destPath)
-	if err := copyDir(repoRoot, destPath); err != nil {
-		return fmt.Errorf("failed to copy repository: %w", err)
-	}
-
-	// Checkout the branch in the copy
-	fmt.Printf("Checking out branch '%s' in copy...\n", branchName)
-	if err := git.CheckoutBranch(destPath, branchName); err != nil {
-		return fmt.Errorf("failed to checkout branch: %w", err)
+	// Check if branch already exists
+	if git.BranchExists(repoRoot, branchName) {
+		// Use existing branch
+		fmt.Printf("Creating worktree for existing branch '%s' at %s...\n", branchName, destPath)
+		if err := git.WorktreeAddExisting(repoRoot, destPath, branchName); err != nil {
+			return fmt.Errorf("failed to create worktree: %w", err)
+		}
+	} else {
+		// Create new branch with worktree
+		fmt.Printf("Creating worktree with new branch '%s' at %s...\n", branchName, destPath)
+		if err := git.WorktreeAdd(repoRoot, destPath, branchName); err != nil {
+			return fmt.Errorf("failed to create worktree: %w", err)
+		}
 	}
 
 	// Update state to set this as default branch
@@ -59,97 +59,8 @@ func Clone(branchName string) error {
 		return fmt.Errorf("failed to save state: %w", err)
 	}
 
-	fmt.Printf("Successfully cloned repository to .homura/%s/\n", branchName)
+	fmt.Printf("Successfully created worktree at .homura/%s/\n", branchName)
 	fmt.Printf("Default branch set to '%s'\n", branchName)
-
-	return nil
-}
-
-// copyDir recursively copies a directory tree
-func copyDir(src, dst string) error {
-	// Get source directory info
-	srcInfo, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-
-	// Create destination directory
-	slog.Info("creating directory", "path", dst)
-	if err := os.MkdirAll(dst, srcInfo.Mode()); err != nil {
-		return err
-	}
-
-	// Read source directory
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-
-	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		dstPath := filepath.Join(dst, entry.Name())
-
-		// Skip .homura directory to avoid recursive copy
-		if entry.Name() == ".homura" && filepath.Dir(srcPath) == src {
-			slog.Info("skipping .homura directory")
-			continue
-		}
-
-		// Use os.Stat to follow symlinks and check actual target type
-		info, err := os.Stat(srcPath)
-		if err != nil {
-			return err
-		}
-
-		if info.IsDir() {
-			// Recursively copy subdirectory
-			if err := copyDir(srcPath, dstPath); err != nil {
-				return err
-			}
-		} else {
-			// Copy file
-			if err := copyFile(srcPath, dstPath); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
-// copyFile copies a single file
-func copyFile(src, dst string) error {
-	// Get source file info
-	srcInfo, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-
-	slog.Info("copying file", "src", src, "dst", dst, "size", srcInfo.Size())
-
-	// Open source file
-	srcFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer srcFile.Close()
-
-	// Create destination file
-	dstFile, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer dstFile.Close()
-
-	// Copy contents
-	if _, err := io.Copy(dstFile, srcFile); err != nil {
-		return err
-	}
-
-	// Set file permissions
-	if err := os.Chmod(dst, srcInfo.Mode()); err != nil {
-		return err
-	}
 
 	return nil
 }

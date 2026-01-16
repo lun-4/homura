@@ -8,7 +8,7 @@ import (
 	"github.com/lun-4/homura/internal/git"
 )
 
-// Rm removes a branch copy
+// Rm removes a worktree
 func Rm(branchName string, force bool) error {
 	// Get current working directory
 	cwd, err := os.Getwd()
@@ -34,40 +34,42 @@ func Rm(branchName string, force bool) error {
 		branchName = state.DefaultBranch
 	}
 
-	// Get copy path
-	copyPath := git.GetCopyPath(repoRoot, branchName)
+	// Get worktree path
+	worktreePath := git.GetCopyPath(repoRoot, branchName)
 
-	// Check if copy exists
-	if _, err := os.Stat(copyPath); os.IsNotExist(err) {
-		return fmt.Errorf("copy does not exist at %s", copyPath)
+	// Check if worktree exists
+	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
+		return fmt.Errorf("worktree does not exist at %s", worktreePath)
 	}
 
-	// Check for uncommitted changes
-	hasChanges, err := git.HasUncommittedChanges(copyPath)
-	if err != nil {
-		return fmt.Errorf("failed to check for uncommitted changes: %w", err)
-	}
-
-	if hasChanges && !force {
-		// Show git status
-		status, err := git.GetStatus(copyPath)
+	// Check for uncommitted changes (unless force is set)
+	if !force {
+		hasChanges, err := git.HasUncommittedChanges(worktreePath)
 		if err != nil {
-			return fmt.Errorf("failed to get git status: %w", err)
+			return fmt.Errorf("failed to check for uncommitted changes: %w", err)
 		}
 
-		fmt.Println("Copy has uncommitted changes:")
-		fmt.Println(status)
-		fmt.Println("\nUse -f flag to force removal")
-		return fmt.Errorf("refusing to remove copy with uncommitted changes")
+		if hasChanges {
+			// Show git status
+			status, err := git.GetStatus(worktreePath)
+			if err != nil {
+				return fmt.Errorf("failed to get git status: %w", err)
+			}
+
+			fmt.Println("Worktree has uncommitted changes:")
+			fmt.Println(status)
+			fmt.Println("\nUse -f flag to force removal")
+			return fmt.Errorf("refusing to remove worktree with uncommitted changes")
+		}
 	}
 
-	// Remove the copy directory
-	fmt.Printf("Removing .homura/%s/...\n", branchName)
-	if err := os.RemoveAll(copyPath); err != nil {
-		return fmt.Errorf("failed to remove copy: %w", err)
+	// Remove the worktree using git worktree remove
+	fmt.Printf("Removing worktree .homura/%s/...\n", branchName)
+	if err := git.WorktreeRemove(repoRoot, worktreePath, force); err != nil {
+		return fmt.Errorf("failed to remove worktree: %w", err)
 	}
 
-	fmt.Printf("Successfully removed .homura/%s/\n", branchName)
+	fmt.Printf("Successfully removed worktree .homura/%s/\n", branchName)
 
 	return nil
 }
