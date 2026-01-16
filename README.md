@@ -1,9 +1,14 @@
 # homura
 
-claude code web for terminal addicts - now using git worktrees!
+claude code web for terminal addicts that also really don't want to deal with git submodules or worktrees
 
-Manage multiple concurrent working directories within a Git repository using native git worktrees.
-Much faster than full copies, and changes are automatically tracked in the same repository.
+(also because CC web does not support setting a docker image as env, and installing Elixir on it was a horror experience
+which also didn't work. so fuck it)
+
+_lol_
+
+**Note:** This version uses git worktrees internally for faster cloning and better disk efficiency.
+You don't need to know anything about worktrees - homura handles it for you!
 
 ## how get
 
@@ -21,17 +26,17 @@ mv ./homura ~/.local/bin
 ```sh
 cd shit
 
-# create a worktree in .homura/fix-indices/ with a new branch
+# copy current cwd to .homura/fix-indices/
 homura clone fix-indices
 
-# list all worktrees
+# list all branches. you can create more than one concurrently
 homura ls
 
 # running `homura clone` sets a default branch to the newly created one.
 homura sh [branch]
 
 # in the inner shell, you can do whatever you want.
-# it's a git worktree - same repo, different working directory
+# this is a complete copy of your cwd
 # and that includes running multiple copies of claude
 claude
 
@@ -44,14 +49,7 @@ git push ...
 # exit the homura shell, putting you back to your main shell
 exit
 
-# remove the default worktree
+# remove the default branch
 # if there are uncommitted changes, this will fail unless you add `-f`
 homura rm
 ```
-
-## benefits over full copies
-
-- **Fast creation** - worktrees are nearly instant, no file copying
-- **Shared .git** - all worktrees share the same git objects
-- **Easy merging** - branches are in the same repo, just `git merge`
-- **Disk efficient** - only working files are duplicated, not git history
