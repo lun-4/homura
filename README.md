@@ -1,6 +1,6 @@
 # homura
 
-claude code web for terminal addicts that also really don't want to deal with git submodules or worktrees
+claude code web for terminal addicts - uses git worktrees for fast, disk-efficient branching
 
 (also because CC web does not support setting a docker image as env, and installing Elixir on it was a horror experience
 which also didn't work. so fuck it)
@@ -26,7 +26,7 @@ mv ./homura ~/.local/bin
 ```sh
 cd shit
 
-# copy current cwd to .homura/fix-indices/
+# create a worktree at .homura/fix-indices/
 homura clone fix-indices
 
 # list all branches. you can create more than one concurrently
@@ -36,7 +36,7 @@ homura ls
 homura sh [branch]
 
 # in the inner shell, you can do whatever you want.
-# this is a complete copy of your cwd
+# this is a git worktree sharing the same .git
 # and that includes running multiple copies of claude
 claude
 
