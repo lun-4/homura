@@ -10,7 +10,8 @@ import (
 )
 
 var (
-	forceFlag bool
+	forceFlag   bool
+	sandboxFlag bool
 )
 
 var rootCmd = &cobra.Command{
@@ -37,7 +38,7 @@ var shCmd = &cobra.Command{
 		if len(args) > 0 {
 			branchName = args[0]
 		}
-		return commands.Sh(branchName)
+		return commands.Sh(branchName, sandboxFlag)
 	},
 }
 
@@ -65,6 +66,7 @@ var lsCmd = &cobra.Command{
 
 func init() {
 	rmCmd.Flags().BoolVarP(&forceFlag, "force", "f", false, "Force removal even with uncommitted changes")
+	shCmd.Flags().BoolVarP(&sandboxFlag, "sandbox", "s", false, "Run shell in FUSE sandbox with filesystem isolation")
 
 	rootCmd.AddCommand(cloneCmd)
 	rootCmd.AddCommand(shCmd)

@@ -8,10 +8,16 @@ import (
 
 	"github.com/lun-4/homura/internal/config"
 	"github.com/lun-4/homura/internal/git"
+	"github.com/lun-4/homura/internal/sandbox"
 )
 
 // Sh opens a shell in the specified branch copy
-func Sh(branchName string) error {
+func Sh(branchName string, sandboxed bool) error {
+	// Check if we're the re-exec'd child inside the sandbox
+	if sandbox.IsReexecChild() {
+		return sandbox.RunChild()
+	}
+
 	// Get current working directory
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -48,6 +54,20 @@ func Sh(branchName string) error {
 	shell := os.Getenv("SHELL")
 	if shell == "" {
 		shell = "/bin/sh"
+	}
+
+	// If sandboxed mode, re-exec with namespaces
+	if sandboxed {
+		fmt.Printf("Opening sandboxed shell in .homura/%s/\n", branchName)
+		fmt.Printf("Type 'exit' to return to original repository\n")
+
+		cfg := &sandbox.SandboxConfig{
+			WorktreePath: copyPath,
+			BranchName:   branchName,
+			Shell:        shell,
+			RepoRoot:     repoRoot,
+		}
+		return sandbox.ReexecSelf(cfg)
 	}
 
 	fmt.Printf("Opening shell in .homura/%s/\n", branchName)
