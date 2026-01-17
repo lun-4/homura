@@ -17,11 +17,12 @@ const (
 
 // SandboxConfig holds the configuration passed from parent to child process
 type SandboxConfig struct {
-	WorktreePath   string `json:"worktree_path"`
-	BranchName     string `json:"branch_name"`
-	Shell          string `json:"shell"`
-	RepoRoot       string `json:"repo_root"`
-	FuseMountPoint string `json:"fuse_mount_point"`
+	WorktreePath   string   `json:"worktree_path"`
+	BranchName     string   `json:"branch_name"`
+	Command        string   `json:"command"`
+	Args           []string `json:"args"`
+	RepoRoot       string   `json:"repo_root"`
+	FuseMountPoint string   `json:"fuse_mount_point"`
 }
 
 // Encode serializes the config to JSON for passing via environment variable

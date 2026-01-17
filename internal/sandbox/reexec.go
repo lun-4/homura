@@ -60,8 +60,10 @@ func ReexecSelf(cfg *SandboxConfig) error {
 	slog.Info("re-executing self in namespaces", "executable", self)
 
 	// Build the command to re-exec ourselves
-	// We pass "sh" and the branch name so the child can continue the sh command flow
-	cmd := exec.Command(self, "sh", "--sandbox", cfg.BranchName)
+	// We pass "exec" with sandbox flag, branch name, and the command to run
+	execArgs := []string{"exec", "--sandbox", cfg.BranchName, "--", cfg.Command}
+	execArgs = append(execArgs, cfg.Args...)
+	cmd := exec.Command(self, execArgs...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

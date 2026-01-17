@@ -25,7 +25,8 @@ func RunChild() error {
 	slog.Info("sandbox config loaded",
 		"worktree", cfg.WorktreePath,
 		"branch", cfg.BranchName,
-		"shell", cfg.Shell,
+		"command", cfg.Command,
+		"args", cfg.Args,
 		"fuseMountPoint", fuseMountPoint,
 	)
 
@@ -75,10 +76,10 @@ func RunChild() error {
 		return fmt.Errorf("failed to chdir to worktree: %w", err)
 	}
 
-	slog.Info("spawning shell", "shell", cfg.Shell, "cwd", cfg.WorktreePath)
+	slog.Info("spawning command", "command", cfg.Command, "args", cfg.Args, "cwd", cfg.WorktreePath)
 
-	// Spawn the shell
-	cmd := exec.Command(cfg.Shell)
+	// Spawn the command
+	cmd := exec.Command(cfg.Command, cfg.Args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -87,16 +88,11 @@ func RunChild() error {
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-				// Exit codes 0, 130 (Ctrl+C), and normal shell exits are fine
-				exitCode := status.ExitStatus()
-				if exitCode == 0 || exitCode == 130 {
-					return nil
-				}
 				// Propagate the exit code
-				os.Exit(exitCode)
+				os.Exit(status.ExitStatus())
 			}
 		}
-		return fmt.Errorf("shell execution failed: %w", err)
+		return fmt.Errorf("command execution failed: %w", err)
 	}
 
 	return nil

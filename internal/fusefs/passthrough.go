@@ -7,6 +7,8 @@ import (
 // PassthroughRoot creates a loopback FUSE root that mirrors the source directory
 // This uses go-fuse's built-in LoopbackRoot which handles all FUSE operations
 // by forwarding them to the underlying filesystem
+//
+// NOTE: this is only really useful for debugging
 func PassthroughRoot(source string) (fs.InodeEmbedder, error) {
 	return fs.NewLoopbackRoot(source)
 }

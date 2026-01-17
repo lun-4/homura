@@ -9,24 +9,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Chroot changes the root filesystem to newRoot using chroot
-// This is simpler than pivot_root and avoids FUSE recursion issues
-func Chroot(newRoot string) error {
-	slog.Info("chrooting", "newRoot", newRoot)
-
-	// Chroot to the new root
-	if err := unix.Chroot(newRoot); err != nil {
-		return fmt.Errorf("chroot failed: %w", err)
-	}
-
-	// Change to the new root
-	if err := unix.Chdir("/"); err != nil {
-		return fmt.Errorf("failed to chdir to new root: %w", err)
-	}
-
-	return nil
-}
-
 // PivotRoot uses pivot_root to change the root filesystem
 // This properly moves all mounts to the new root
 func PivotRoot(newRoot string) error {
