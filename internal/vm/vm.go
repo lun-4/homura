@@ -12,29 +12,39 @@ import (
 
 // VM represents a running homura VM instance
 type VM struct {
-	WorkDir         string      // Current working directory
-	SSHPort         int         // Detected free port for SSH
-	SSHPubPath      string      // Path to user's SSH public key
-	QEMUCmd         *exec.Cmd   // QEMU process
-	StateDir        string      // Temporary state directory
-	Images          *ImagePaths
-	EphemeralDisk   string      // Path to ephemeral rootfs disk
+	WorkDir       string        // Current working directory
+	SSHPubPath    string        // Path to user's SSH public key
+	QEMUCmd       *exec.Cmd     // QEMU process
+	StateDir      string        // Temporary state directory
+	Images        *ImagePaths
+	EphemeralDisk string        // Path to ephemeral rootfs disk
+
+	// Passt networking fields
+	SlotNumber   int            // Sequential slot (1-254)
+	IPAddress    string         // 127.0.0.X
+	PortStart    int            // First port in range (e.g., 10000)
+	PortEnd      int            // Last port in range (e.g., 10009)
+	PasstManager *PasstManager  // Passt daemon manager
 }
 
 // NewVM creates a new VM instance with detected configuration
 func NewVM() (*VM, error) {
 	slog.Info("Initializing new VM instance")
 
+	// Check if passt is available
+	if !IsPasstAvailable() {
+		return nil, fmt.Errorf("passt is required but not found in PATH\n\n" +
+			"homura vm requires passt for networking. Please install it:\n" +
+			"  • Debian/Ubuntu: apt install passt\n" +
+			"  • Arch Linux: pacman -S passt\n" +
+			"  • Fedora: dnf install passt\n\n" +
+			"For more info: https://passt.top/")
+	}
+
 	// Detect current working directory
 	workDir, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get working directory: %w", err)
-	}
-
-	// Find free SSH port
-	sshPort, err := FindFreePort()
-	if err != nil {
-		return nil, fmt.Errorf("failed to find free port: %w", err)
 	}
 
 	// Create temporary state directory
@@ -43,9 +53,27 @@ func NewVM() (*VM, error) {
 		return nil, fmt.Errorf("failed to create state directory: %w", err)
 	}
 
+	// Allocate VM slot (IP and port range)
+	socketPath := filepath.Join(stateDir, "passt.sock")
+	slot, err := AllocateVMSlot(socketPath)
+	if err != nil {
+		os.RemoveAll(stateDir) // Clean up state dir on error
+		return nil, fmt.Errorf("failed to allocate VM slot: %w", err)
+	}
+
+	// Create passt manager
+	passtMgr, err := NewPasstManager(stateDir, slot)
+	if err != nil {
+		ReleaseVMSlot(slot.SlotNumber) // Release slot on error
+		os.RemoveAll(stateDir)
+		return nil, fmt.Errorf("failed to create passt manager: %w", err)
+	}
+
 	// Use user's SSH key instead of generating ephemeral one
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
+		ReleaseVMSlot(slot.SlotNumber)
+		os.RemoveAll(stateDir)
 		return nil, fmt.Errorf("failed to get home directory: %w", err)
 	}
 
@@ -63,19 +91,27 @@ func NewVM() (*VM, error) {
 		}
 	}
 	if sshPubPath == "" {
+		ReleaseVMSlot(slot.SlotNumber)
+		os.RemoveAll(stateDir)
 		return nil, fmt.Errorf("no SSH public key found in ~/.ssh/ (tried: id_ed25519.pub, id_rsa.pub, id_ecdsa.pub)")
 	}
 
 	vm := &VM{
-		WorkDir:    workDir,
-		SSHPort:    sshPort,
-		SSHPubPath: sshPubPath,
-		StateDir:   stateDir,
+		WorkDir:      workDir,
+		SSHPubPath:   sshPubPath,
+		StateDir:     stateDir,
+		SlotNumber:   slot.SlotNumber,
+		IPAddress:    slot.IPAddress,
+		PortStart:    slot.PortStart,
+		PortEnd:      slot.PortEnd,
+		PasstManager: passtMgr,
 	}
 
 	slog.Info("VM instance initialized",
 		"workdir", workDir,
-		"ssh_port", sshPort,
+		"slot", slot.SlotNumber,
+		"ip", slot.IPAddress,
+		"port_range", fmt.Sprintf("%d-%d", slot.PortStart, slot.PortEnd),
 		"ssh_key", sshPubPath)
 
 	return vm, nil
@@ -84,6 +120,11 @@ func NewVM() (*VM, error) {
 // Start starts the VM
 func (vm *VM) Start() error {
 	slog.Info("Starting VM")
+
+	// Start passt first
+	if err := vm.PasstManager.Start(); err != nil {
+		return fmt.Errorf("failed to start passt: %w", err)
+	}
 
 	// Ensure images are downloaded and built
 	images, err := EnsureImages(vm.SSHPubPath)
@@ -101,12 +142,12 @@ func (vm *VM) Start() error {
 
 	// Build QEMU configuration
 	cfg := &QEMUConfig{
-		KernelPath:    images.KernelPath,
-		InitrdPath:    images.InitramfsPath,
-		RootfsPath:    ephemeralDisk,
-		Memory:        2048, // 2GB
-		CPUs:          4,
-		SSHPort:       vm.SSHPort,
+		KernelPath:  images.KernelPath,
+		InitrdPath:  images.InitramfsPath,
+		RootfsPath:  ephemeralDisk,
+		Memory:      2048, // 2GB
+		CPUs:        4,
+		PasstSocket: vm.PasstManager.SocketPath,
 	}
 
 	// Build QEMU command
@@ -169,6 +210,20 @@ func (vm *VM) Wait() error {
 func (vm *VM) Cleanup() error {
 	slog.Info("Cleaning up VM state", "state_dir", vm.StateDir)
 
+	// Stop passt
+	if vm.PasstManager != nil {
+		if err := vm.PasstManager.Stop(); err != nil {
+			slog.Warn("Failed to stop passt", "error", err)
+		}
+	}
+
+	// Release VM slot
+	if vm.SlotNumber > 0 {
+		if err := ReleaseVMSlot(vm.SlotNumber); err != nil {
+			slog.Warn("Failed to release VM slot", "slot", vm.SlotNumber, "error", err)
+		}
+	}
+
 	// Remove ephemeral disk
 	if vm.EphemeralDisk != "" {
 		if err := os.Remove(vm.EphemeralDisk); err != nil && !os.IsNotExist(err) {
@@ -188,7 +243,10 @@ func (vm *VM) Cleanup() error {
 func (vm *VM) DisplayConnectionInfo() {
 	fmt.Println()
 	fmt.Println("[homura vm] Starting microvm...")
-	fmt.Printf("[homura vm] SSH: ssh -p %d root@localhost\n", vm.SSHPort)
+	fmt.Printf("[homura vm] SSH: ssh -p %d root@%s\n", vm.PortStart, vm.IPAddress)
+	fmt.Printf("[homura vm] Slot: %d (IP: %s, Ports: %d-%d)\n",
+		vm.SlotNumber, vm.IPAddress, vm.PortStart, vm.PortEnd)
+	fmt.Println("[homura vm] Network: passt")
 	fmt.Println("[homura vm] Press Ctrl+C to stop")
 	fmt.Println()
 }

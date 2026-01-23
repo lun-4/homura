@@ -7,12 +7,12 @@ import (
 
 // QEMUConfig contains configuration for launching QEMU
 type QEMUConfig struct {
-	KernelPath string
-	InitrdPath string
-	RootfsPath string  // Path to ephemeral ext4 disk
-	Memory     int     // MB
-	CPUs       int
-	SSHPort    int
+	KernelPath   string
+	InitrdPath   string
+	RootfsPath   string // Path to ephemeral ext4 disk
+	Memory       int    // MB
+	CPUs         int
+	PasstSocket  string // Passt Unix socket path
 }
 
 // BuildQEMUArgs builds the argument list for launching QEMU microvm
@@ -44,8 +44,8 @@ func BuildQEMUArgs(cfg *QEMUConfig) []string {
 		"-drive", fmt.Sprintf("id=root,file=%s,format=raw,if=none", cfg.RootfsPath),
 		"-device", "virtio-blk-device,drive=root",
 
-		// Network with SSH port forwarding
-		"-netdev", fmt.Sprintf("user,id=net0,hostfwd=tcp::%d-:22", cfg.SSHPort),
+		// Passt networking via Unix socket
+		"-netdev", fmt.Sprintf("stream,id=net0,addr.type=unix,addr.path=%s", cfg.PasstSocket),
 		"-device", "virtio-net-device,netdev=net0",
 	}
 
