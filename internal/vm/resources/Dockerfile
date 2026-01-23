@@ -1,0 +1,39 @@
+FROM alpine:3.21
+
+RUN apk add --no-cache openrc openssh curl git fish htop bash helix nodejs go python3 cmake \
+    && sed -i 's|^root:.*:/bin/sh$|root:x:0:0:root:/root:/usr/bin/fish|' /etc/passwd
+
+# Enable services for boot
+RUN rc-update add sshd default
+RUN rc-update add devfs boot
+RUN rc-update add procfs boot
+RUN rc-update add sysfs boot
+RUN rc-update add hostname boot
+
+# Configure network interface with static IP (QEMU user-mode uses 10.0.2.0/24)
+RUN mkdir -p /etc/network && printf 'auto lo\niface lo inet loopback\n\nauto eth0\niface eth0 inet static\n    address 10.0.2.15\n    netmask 255.255.255.0\n    gateway 10.0.2.2\n' > /etc/network/interfaces
+
+# Configure SSH - key auth only
+RUN sed -i 's/#PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+
+# Setup root SSH directory
+RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh
+
+# Inject SSH public key at build time
+ARG SSH_PUB_KEY
+RUN echo "$SSH_PUB_KEY" > /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
+
+# Fix /var/empty permissions for sshd privilege separation
+RUN mkdir -p /var/empty && chown root:root /var/empty && chmod 755 /var/empty
+
+# Set hostname
+RUN echo "homura-vm" > /etc/hostname
+
+# Install Claude Code
+RUN curl -fsSL https://claude.ai/install.sh | bash
+
+# OpenRC needs this for containers/VMs without real hardware clock
+RUN sed -i 's/^#rc_sys=.*/rc_sys="lxc"/' /etc/rc.conf
+
+# Ensure ttys are available for login
+RUN sed -i 's/^#rc_tty_number=.*/rc_tty_number=0/' /etc/rc.conf

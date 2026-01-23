@@ -63,6 +63,19 @@ var lsCmd = &cobra.Command{
 	},
 }
 
+var vmCmd = &cobra.Command{
+	Use:   "vm [branch-name]",
+	Short: "Launch a QEMU microvm with 9p mounts",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		branchName := ""
+		if len(args) > 0 {
+			branchName = args[0]
+		}
+		return commands.RunVM(cmd, args, branchName)
+	},
+}
+
 func init() {
 	rmCmd.Flags().BoolVarP(&forceFlag, "force", "f", false, "Force removal even with uncommitted changes")
 
@@ -70,6 +83,7 @@ func init() {
 	rootCmd.AddCommand(shCmd)
 	rootCmd.AddCommand(rmCmd)
 	rootCmd.AddCommand(lsCmd)
+	rootCmd.AddCommand(vmCmd)
 }
 
 func main() {
