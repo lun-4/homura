@@ -62,15 +62,14 @@ func (pm *PasstManager) Start() error {
 	udpRangeForward := fmt.Sprintf("%s/%s", pm.IPAddress, portRange)
 
 	args := []string{
-		"-f",                    // Run in foreground (we manage it)
-		"-s", pm.SocketPath,     // Unix socket path for QEMU
-		"--outbound-if4", pm.IPAddress, // Bind outbound connections to this IP
-		"-t", sshPortMap,        // TCP SSH port mapping (external → 22)
-		"-t", tcpRangeForward,   // TCP port forwarding for rest (1:1)
-		"-u", udpRangeForward,   // UDP port forwarding (1:1)
-		"-a", "10.0.2.15",       // Guest IP address (static for all VMs)
-		"-n", "24",              // Network prefix length
-		"-g", "10.0.2.2",        // Gateway IP
+		"-f",                // Run in foreground (we manage it)
+		"-s", pm.SocketPath, // Unix socket path for QEMU
+		"-t", sshPortMap, // TCP SSH port mapping (external → 22)
+		"-t", tcpRangeForward, // TCP port forwarding for rest (1:1)
+		"-u", udpRangeForward, // UDP port forwarding (1:1)
+		"-a", "10.0.2.15", // Guest IP address (static for all VMs)
+		"-n", "24", // Network prefix length
+		"-g", "10.0.2.2", // Gateway IP
 	}
 
 	pm.Cmd = exec.Command("passt", args...)
