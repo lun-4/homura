@@ -86,7 +86,7 @@ func getCacheDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cacheDir := filepath.Join(home, ".cache", "homura", "vm-images", "alpine-"+alpineVersion)
+	cacheDir := filepath.Join(home, ".cache", "homura", fmt.Sprintf("v%d", VMImplementationVersion), "vm-images", "alpine-"+alpineVersion)
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		return "", err
 	}
