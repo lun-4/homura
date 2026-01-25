@@ -47,13 +47,19 @@ func EnsureImages(sshPubKeyPath string) (*ImagePaths, error) {
 		return nil, fmt.Errorf("failed to get cache directory: %w", err)
 	}
 
+	// Get stable SSH keys directory (not versioned)
+	sshKeysDir, err := getSSHKeysDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get SSH keys directory: %w", err)
+	}
+
 	paths := &ImagePaths{
 		CacheDir:        cacheDir,
 		KernelPath:      filepath.Join(cacheDir, "vmlinuz-virt"),
 		InitramfsPath:   filepath.Join(cacheDir, "initramfs-virt"),
 		ModloopPath:     filepath.Join(cacheDir, "modloop-virt"),
 		RootfsPath:      filepath.Join(cacheDir, "rootfs.ext4"),
-		SSHHostKeysDir:  filepath.Join(cacheDir, "ssh_host_keys"),
+		SSHHostKeysDir:  sshKeysDir,
 	}
 
 	// Download Alpine components if needed
@@ -91,6 +97,19 @@ func getCacheDir() (string, error) {
 		return "", err
 	}
 	return cacheDir, nil
+}
+
+// getSSHKeysDir returns the stable SSH host keys directory (not versioned)
+func getSSHKeysDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	sshKeysDir := filepath.Join(home, ".cache", "homura", "ssh_host_keys")
+	if err := os.MkdirAll(sshKeysDir, 0755); err != nil {
+		return "", err
+	}
+	return sshKeysDir, nil
 }
 
 // downloadAlpineComponents downloads kernel, initramfs, and modloop from Alpine CDN

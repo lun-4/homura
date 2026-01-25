@@ -75,6 +75,7 @@ The VM system uses a versioning scheme to track implementation changes and autom
 - Version is included in cache path: `~/.cache/homura/v{VERSION}/vm-images/alpine-{ALPINE_VERSION}/`
 - When version changes, cache path changes, automatically triggering a rebuild
 - Old versions remain in separate directories (can be cleaned up manually)
+- SSH host keys are stored separately at `~/.cache/homura/ssh_host_keys/` (not versioned, persist across version changes)
 
 #### When to Bump the Version
 
