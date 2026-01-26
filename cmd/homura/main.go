@@ -77,6 +77,13 @@ var vmCmd = &cobra.Command{
 	},
 }
 
+var vmSshCmd = &cobra.Command{
+	Use:   "ssh",
+	Short: "SSH into the VM running for the current directory",
+	Args:  cobra.NoArgs,
+	RunE:  commands.VMSsh,
+}
+
 var ninepCmd = &cobra.Command{
 	Use:   "9p",
 	Short: "Control 9p filesystem passthrough for running VMs",
@@ -146,6 +153,9 @@ func init() {
 	rootCmd.AddCommand(lsCmd)
 	rootCmd.AddCommand(vmCmd)
 	rootCmd.AddCommand(ninepCmd)
+
+	// Add vm subcommands
+	vmCmd.AddCommand(vmSshCmd)
 
 	// Add -d flag to all 9p commands
 	ninepCmd.PersistentFlags().StringVarP(&ninepTargetDir, "dir", "d", "",

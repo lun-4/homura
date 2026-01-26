@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
+	"syscall"
 
 	"github.com/lun-4/homura/internal/config"
 	"github.com/lun-4/homura/internal/git"
@@ -78,5 +80,40 @@ func RunVM(cmd *cobra.Command, args []string, branchName string) error {
 	}
 
 	slog.Info("VM shutdown complete")
+	return nil
+}
+
+// VMSsh implements the `homura vm ssh` command
+func VMSsh(cmd *cobra.Command, args []string) error {
+	// Get current working directory
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	// Find the running VM for this working directory
+	slot, err := vm.FindVMByWorkDir(cwd)
+	if err != nil {
+		return fmt.Errorf("failed to find VM: %w", err)
+	}
+
+	slog.Info("Connecting to VM", "ip", slot.IPAddress, "ssh_port", slot.PortStart, "working_dir", cwd)
+
+	// Use syscall.Exec to replace the current process with SSH
+	// This gives the user a clean SSH session
+	sshPath, err := exec.LookPath("ssh")
+	if err != nil {
+		return fmt.Errorf("ssh command not found: %w", err)
+	}
+
+	// SSH is mapped to the first port in the slot's range
+	sshArgs := []string{"ssh", "-p", fmt.Sprintf("%d", slot.PortStart), fmt.Sprintf("root@%s", slot.IPAddress)}
+
+	// Replace current process with SSH
+	if err := syscall.Exec(sshPath, sshArgs, os.Environ()); err != nil {
+		return fmt.Errorf("failed to exec ssh: %w", err)
+	}
+
+	// This line is unreachable if exec succeeds
 	return nil
 }
