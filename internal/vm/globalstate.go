@@ -19,12 +19,18 @@ const (
 
 // VMSlot represents an allocated VM slot with IP and port range
 type VMSlot struct {
-	SlotNumber       int
-	IPAddress        string
-	PortStart        int
-	PortEnd          int
-	VMPID            int
-	PasstSocketPath  string
+	SlotNumber         int
+	IPAddress          string
+	PortStart          int
+	PortEnd            int
+	VMPID              int
+	PasstSocketPath    string
+
+	// 9p fields
+	WorkingDir         string
+	NinePPID           int
+	NinePControlSocket string
+	NinePControlPort   int
 }
 
 // initGlobalStateDB initializes the global state database with proper schema
@@ -60,10 +66,16 @@ func initGlobalStateDB() error {
 		port_end INTEGER NOT NULL,
 		vm_pid INTEGER NOT NULL,
 		passt_socket_path TEXT NOT NULL,
+		working_dir TEXT NOT NULL,
+		ninep_pid INTEGER NOT NULL,
+		ninep_control_socket TEXT NOT NULL,
+		ninep_control_port INTEGER NOT NULL,
 		created_at INTEGER NOT NULL
 	) STRICT;
 
 	CREATE INDEX IF NOT EXISTS idx_vm_pid ON vm_slots(vm_pid);
+	CREATE INDEX IF NOT EXISTS idx_working_dir ON vm_slots(working_dir);
+	CREATE INDEX IF NOT EXISTS idx_ninep_pid ON vm_slots(ninep_pid);
 	`
 
 	if _, err := db.Exec(schema); err != nil {
@@ -145,7 +157,7 @@ func CleanupStaleSlots() error {
 }
 
 // AllocateVMSlot finds and claims the next available slot
-func AllocateVMSlot(socketPath string) (*VMSlot, error) {
+func AllocateVMSlot(socketPath, workingDir string, ninepPID int, ninepSocket string, ninepPort int) (*VMSlot, error) {
 	if err := initGlobalStateDB(); err != nil {
 		return nil, err
 	}
@@ -201,9 +213,14 @@ func AllocateVMSlot(socketPath string) (*VMSlot, error) {
 	vmPID := os.Getpid()
 	createdAt := time.Now().UnixMilli()
 	_, err = db.Exec(`
-		INSERT INTO vm_slots (slot_number, ip_address, port_start, port_end, vm_pid, passt_socket_path, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, nextSlot, ipAddress, portStart, portEnd, vmPID, socketPath, createdAt)
+		INSERT INTO vm_slots (
+			slot_number, ip_address, port_start, port_end, vm_pid,
+			passt_socket_path, working_dir, ninep_pid, ninep_control_socket,
+			ninep_control_port, created_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, nextSlot, ipAddress, portStart, portEnd, vmPID,
+	   socketPath, workingDir, ninepPID, ninepSocket, ninepPort, createdAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert slot: %w", err)
 	}
@@ -214,12 +231,16 @@ func AllocateVMSlot(socketPath string) (*VMSlot, error) {
 	committed = true
 
 	return &VMSlot{
-		SlotNumber:      nextSlot,
-		IPAddress:       ipAddress,
-		PortStart:       portStart,
-		PortEnd:         portEnd,
-		VMPID:           vmPID,
-		PasstSocketPath: socketPath,
+		SlotNumber:         nextSlot,
+		IPAddress:          ipAddress,
+		PortStart:          portStart,
+		PortEnd:            portEnd,
+		VMPID:              vmPID,
+		PasstSocketPath:    socketPath,
+		WorkingDir:         workingDir,
+		NinePPID:           ninepPID,
+		NinePControlSocket: ninepSocket,
+		NinePControlPort:   ninepPort,
 	}, nil
 }
 
@@ -241,4 +262,44 @@ func ReleaseVMSlot(slotNumber int) error {
 	}
 
 	return nil
+}
+
+// FindVMByWorkDir finds a running VM by its working directory
+func FindVMByWorkDir(workDir string) (*VMSlot, error) {
+	if err := initGlobalStateDB(); err != nil {
+		return nil, err
+	}
+
+	// Clean up stale slots first
+	if err := CleanupStaleSlots(); err != nil {
+		return nil, fmt.Errorf("failed to cleanup stale slots: %w", err)
+	}
+
+	db, err := sql.Open("sqlite3", GlobalStateDBPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open global state DB: %w", err)
+	}
+	defer db.Close()
+
+	var slot VMSlot
+	err = db.QueryRow(`
+		SELECT slot_number, ip_address, port_start, port_end, vm_pid,
+		       passt_socket_path, working_dir, ninep_pid, ninep_control_socket,
+		       ninep_control_port
+		FROM vm_slots
+		WHERE working_dir = ?
+	`, workDir).Scan(
+		&slot.SlotNumber, &slot.IPAddress, &slot.PortStart, &slot.PortEnd,
+		&slot.VMPID, &slot.PasstSocketPath, &slot.WorkingDir,
+		&slot.NinePPID, &slot.NinePControlSocket, &slot.NinePControlPort,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("no VM found for working directory: %s", workDir)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to find VM: %w", err)
+	}
+
+	return &slot, nil
 }

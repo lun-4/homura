@@ -7,12 +7,14 @@ import (
 
 // QEMUConfig contains configuration for launching QEMU
 type QEMUConfig struct {
-	KernelPath   string
-	InitrdPath   string
-	RootfsPath   string // Path to ephemeral ext4 disk
-	Memory       int    // MB
-	CPUs         int
-	PasstSocket  string // Passt Unix socket path
+	KernelPath       string
+	InitrdPath       string
+	RootfsPath       string // Path to ephemeral ext4 disk
+	Memory           int    // MB
+	CPUs             int
+	PasstSocket      string // Passt Unix socket path
+	NinePToken       string // 9p authentication token
+	NinePControlPort int    // 9p control port
 }
 
 // BuildQEMUArgs builds the argument list for launching QEMU microvm
@@ -56,5 +58,12 @@ func BuildQEMUArgs(cfg *QEMUConfig) []string {
 func buildKernelCmdline(cfg *QEMUConfig) string {
 	// Kernel parameters for microvm boot
 	cmdline := "earlyprintk=ttyS0 console=ttyS0 root=/dev/vda rootfstype=ext4 rw"
+
+	// Add 9p params
+	if cfg.NinePToken != "" {
+		cmdline += fmt.Sprintf(" p9.token=%s p9.port=%d",
+			cfg.NinePToken, cfg.NinePControlPort)
+	}
+
 	return cmdline
 }

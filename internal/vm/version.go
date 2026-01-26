@@ -11,4 +11,6 @@ package vm
 //
 // Version History:
 // 1 - Initial implementation with passt networking
-const VMImplementationVersion = 1
+// 2 - Add ~/.local/bin to PATH for all shells
+// 3 - Add 9p filesystem passthrough support
+const VMImplementationVersion = 3

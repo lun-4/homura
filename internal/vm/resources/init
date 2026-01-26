@@ -17,6 +17,10 @@ modprobe virtio_net
 modprobe mbcache
 modprobe jbd2
 modprobe ext4
+modprobe netfs
+modprobe 9pnet
+modprobe 9pnet_fd
+modprobe 9p
 
 # Wait for /dev/vda to appear
 echo "Waiting for /dev/vda..."

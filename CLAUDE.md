@@ -36,6 +36,61 @@ homura rm [branch-name]
 homura rm -f [branch-name]  # Force removal even with uncommitted changes
 ```
 
+## 9p Filesystem Passthrough
+
+homura VMs support 9p filesystem passthrough, allowing the VM to access host directories securely.
+
+### Usage
+
+**Auto-exposed directory:**
+- The working directory is automatically exposed at `/mnt/host` in the VM
+- Created/modified files are immediately visible on both sides
+
+**Expose additional paths from host:**
+```bash
+homura 9p expose /path/to/directory
+homura 9p list  # View all exposed paths
+```
+
+**Request paths from VM:**
+```bash
+# Inside the VM:
+9pvm-request /home/luna/projects/foo
+
+# On host (approve the request):
+homura 9p req list
+homura 9p req approve req-<id>
+```
+
+**Management commands:**
+```bash
+homura 9p status              # Show server info (current dir VM)
+homura 9p -d /path/to/vm status  # Show status for specific VM
+homura 9p unexpose /path      # Remove exposed path
+homura 9p req deny <id>       # Deny a VM request
+```
+
+**Targeting VMs:**
+- By default, commands target the VM in the current working directory
+- Use `-d <directory>` to target a different VM
+- Example: `homura 9p -d /tmp/myproject expose /home/luna/data`
+
+### How It Works
+
+- VMs mount 9p filesystem automatically at `/mnt/host`
+- Uses Plan 9 filesystem protocol over TCP (port 5640)
+- Sparse visibility: only exposed paths are visible (others return ENOENT)
+- Token authentication prevents unauthorized access
+- Request approval system for VM-initiated path additions
+
+### Security Model
+
+- Only explicitly exposed paths are accessible
+- Non-exposed paths are completely hidden from the VM
+- Ancestor directories are synthetic (read-only, show only exposed children)
+- VM path requests require host approval
+- Full read/write access to exposed paths
+
 ## Architecture
 
 ### State Management

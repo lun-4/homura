@@ -7,7 +7,12 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
+	"time"
+
+	"github.com/lun-4/homura/internal/git"
 )
 
 // VM represents a running homura VM instance
@@ -25,6 +30,12 @@ type VM struct {
 	PortStart    int            // First port in range (e.g., 10000)
 	PortEnd      int            // Last port in range (e.g., 10009)
 	PasstManager *PasstManager  // Passt daemon manager
+
+	// 9p filesystem fields
+	NinePProcess      *exec.Cmd
+	NinePControlSock  string
+	NinePToken        string
+	NinePControlPort  int
 }
 
 // NewVM creates a new VM instance with detected configuration
@@ -53,18 +64,80 @@ func NewVM() (*VM, error) {
 		return nil, fmt.Errorf("failed to create state directory: %w", err)
 	}
 
-	// Allocate VM slot (IP and port range)
+	// Construct passt socket path (slot allocation comes later)
 	socketPath := filepath.Join(stateDir, "passt.sock")
-	slot, err := AllocateVMSlot(socketPath)
+
+	// Start 9passthrough server
+	slog.Info("Starting 9passthrough server", "workdir", workDir)
+
+	// Get repository root directory
+	rootDir, err := git.GetRepoRoot(workDir)
 	if err != nil {
-		os.RemoveAll(stateDir) // Clean up state dir on error
+		os.RemoveAll(stateDir)
+		return nil, fmt.Errorf("failed to get repo root: %w", err)
+	}
+
+	ninepBinary := filepath.Join(rootDir, "9passthrough", "9passthrough")
+	if _, err := os.Stat(ninepBinary); os.IsNotExist(err) {
+		os.RemoveAll(stateDir)
+		return nil, fmt.Errorf("9passthrough binary not found at %s (run 'make 9p' to build)", ninepBinary)
+	}
+
+	ninepCmd := exec.Command(ninepBinary, workDir)
+	if err := ninepCmd.Start(); err != nil {
+		os.RemoveAll(stateDir)
+		return nil, fmt.Errorf("failed to start 9passthrough: %w", err)
+	}
+
+	// Wait for token file
+	time.Sleep(500 * time.Millisecond)
+
+	// Read token file
+	tokenFile := fmt.Sprintf("/tmp/9p-token-%d", ninepCmd.Process.Pid)
+	tokenData, err := os.ReadFile(tokenFile)
+	if err != nil {
+		ninepCmd.Process.Kill()
+		os.RemoveAll(stateDir)
+		return nil, fmt.Errorf("failed to read 9p token file: %w", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(tokenData)), "\n")
+	if len(lines) < 2 {
+		ninepCmd.Process.Kill()
+		os.RemoveAll(stateDir)
+		return nil, fmt.Errorf("invalid 9p token file format")
+	}
+
+	ninepToken := lines[0]
+	controlPort, err := strconv.Atoi(lines[1])
+	if err != nil {
+		ninepCmd.Process.Kill()
+		os.RemoveAll(stateDir)
+		return nil, fmt.Errorf("invalid 9p control port: %w", err)
+	}
+	ninepControlSock := fmt.Sprintf("/tmp/9p-control-%d.sock", ninepCmd.Process.Pid)
+
+	slog.Info("9passthrough started", "pid", ninepCmd.Process.Pid, "control_port", controlPort)
+
+	// Allocate VM slot (now with 9p info)
+	slot, err := AllocateVMSlot(
+		socketPath,
+		workDir,
+		ninepCmd.Process.Pid,
+		ninepControlSock,
+		controlPort,
+	)
+	if err != nil {
+		ninepCmd.Process.Kill()
+		os.RemoveAll(stateDir)
 		return nil, fmt.Errorf("failed to allocate VM slot: %w", err)
 	}
 
 	// Create passt manager
 	passtMgr, err := NewPasstManager(stateDir, slot)
 	if err != nil {
-		ReleaseVMSlot(slot.SlotNumber) // Release slot on error
+		ninepCmd.Process.Kill()
+		ReleaseVMSlot(slot.SlotNumber)
 		os.RemoveAll(stateDir)
 		return nil, fmt.Errorf("failed to create passt manager: %w", err)
 	}
@@ -72,6 +145,7 @@ func NewVM() (*VM, error) {
 	// Use user's SSH key instead of generating ephemeral one
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
+		ninepCmd.Process.Kill()
 		ReleaseVMSlot(slot.SlotNumber)
 		os.RemoveAll(stateDir)
 		return nil, fmt.Errorf("failed to get home directory: %w", err)
@@ -91,20 +165,25 @@ func NewVM() (*VM, error) {
 		}
 	}
 	if sshPubPath == "" {
+		ninepCmd.Process.Kill()
 		ReleaseVMSlot(slot.SlotNumber)
 		os.RemoveAll(stateDir)
 		return nil, fmt.Errorf("no SSH public key found in ~/.ssh/ (tried: id_ed25519.pub, id_rsa.pub, id_ecdsa.pub)")
 	}
 
 	vm := &VM{
-		WorkDir:      workDir,
-		SSHPubPath:   sshPubPath,
-		StateDir:     stateDir,
-		SlotNumber:   slot.SlotNumber,
-		IPAddress:    slot.IPAddress,
-		PortStart:    slot.PortStart,
-		PortEnd:      slot.PortEnd,
-		PasstManager: passtMgr,
+		WorkDir:          workDir,
+		SSHPubPath:       sshPubPath,
+		StateDir:         stateDir,
+		SlotNumber:       slot.SlotNumber,
+		IPAddress:        slot.IPAddress,
+		PortStart:        slot.PortStart,
+		PortEnd:          slot.PortEnd,
+		PasstManager:     passtMgr,
+		NinePProcess:     ninepCmd,
+		NinePControlSock: ninepControlSock,
+		NinePToken:       ninepToken,
+		NinePControlPort: controlPort,
 	}
 
 	slog.Info("VM instance initialized",
@@ -142,12 +221,14 @@ func (vm *VM) Start() error {
 
 	// Build QEMU configuration
 	cfg := &QEMUConfig{
-		KernelPath:  images.KernelPath,
-		InitrdPath:  images.InitramfsPath,
-		RootfsPath:  ephemeralDisk,
-		Memory:      2048, // 2GB
-		CPUs:        4,
-		PasstSocket: vm.PasstManager.SocketPath,
+		KernelPath:       images.KernelPath,
+		InitrdPath:       images.InitramfsPath,
+		RootfsPath:       ephemeralDisk,
+		Memory:           2048, // 2GB
+		CPUs:             4,
+		PasstSocket:      vm.PasstManager.SocketPath,
+		NinePToken:       vm.NinePToken,
+		NinePControlPort: vm.NinePControlPort,
 	}
 
 	// Build QEMU command
@@ -210,6 +291,19 @@ func (vm *VM) Wait() error {
 func (vm *VM) Cleanup() error {
 	slog.Info("Cleaning up VM state", "state_dir", vm.StateDir)
 
+	// Stop 9passthrough
+	if vm.NinePProcess != nil {
+		slog.Info("Stopping 9passthrough", "pid", vm.NinePProcess.Process.Pid)
+		if err := vm.NinePProcess.Process.Kill(); err != nil {
+			slog.Warn("Failed to kill 9passthrough", "error", err)
+		}
+		vm.NinePProcess.Wait() // Reap zombie
+
+		// Clean up token file
+		tokenFile := fmt.Sprintf("/tmp/9p-token-%d", vm.NinePProcess.Process.Pid)
+		os.Remove(tokenFile)
+	}
+
 	// Stop passt
 	if vm.PasstManager != nil {
 		if err := vm.PasstManager.Stop(); err != nil {
@@ -247,6 +341,9 @@ func (vm *VM) DisplayConnectionInfo() {
 	fmt.Printf("[homura vm] Slot: %d (IP: %s, Ports: %d-%d)\n",
 		vm.SlotNumber, vm.IPAddress, vm.PortStart, vm.PortEnd)
 	fmt.Println("[homura vm] Network: passt")
+	fmt.Printf("[homura vm] 9p filesystem: /mnt/host (exposed: %s)\n", vm.WorkDir)
+	fmt.Println("[homura vm] Request paths from VM: 9pvm-request /path/to/expose")
+	fmt.Println("[homura vm] Control from host: homura 9p <command>")
 	fmt.Println("[homura vm] Press Ctrl+C to stop")
 	fmt.Println()
 }

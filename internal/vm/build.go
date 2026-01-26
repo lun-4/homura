@@ -12,6 +12,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/lun-4/homura/internal/git"
 )
 
 const (
@@ -323,6 +325,10 @@ func buildInitramfs(paths *ImagePaths) error {
 		fmt.Sprintf("modules/%s/kernel/fs/mbcache.ko", kver),
 		fmt.Sprintf("modules/%s/kernel/lib", kver),
 		fmt.Sprintf("modules/%s/kernel/drivers/net/virtio_net.ko", kver),
+		// 9p filesystem modules
+		fmt.Sprintf("modules/%s/kernel/net/9p", kver),
+		fmt.Sprintf("modules/%s/kernel/fs/9p", kver),
+		fmt.Sprintf("modules/%s/kernel/fs/netfs", kver),
 	}
 
 	for _, modPath := range modulePaths {
@@ -348,6 +354,13 @@ func buildInitramfs(paths *ImagePaths) error {
 		filepath.Join(newDir, "lib", "modules", kver, "kernel", "drivers", "net"),
 	); err != nil {
 		slog.Warn("Failed to copy net modules", "error", err)
+	}
+	// Copy 9p network modules
+	if err := copyTree(
+		filepath.Join(modloopMount, "modules", kver, "kernel", "net", "9p"),
+		filepath.Join(newDir, "lib", "modules", kver, "kernel", "net", "9p"),
+	); err != nil {
+		slog.Warn("Failed to copy 9p net modules", "error", err)
 	}
 
 	// Run depmod
@@ -419,6 +432,17 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 	dockerfilePath := filepath.Join(tmpDir, "Dockerfile")
 	if err := os.WriteFile(dockerfilePath, []byte(dockerfileContent), 0644); err != nil {
 		return err
+	}
+
+	// Copy 9pvm-request source for Docker build
+	rootDir, err := git.GetRepoRoot(".")
+	if err != nil {
+		return fmt.Errorf("failed to get repo root: %w", err)
+	}
+	ninepRequestSrc := filepath.Join(rootDir, "9pvm-request")
+	ninepRequestDst := filepath.Join(tmpDir, "9pvm-request")
+	if err := copyTree(ninepRequestSrc, ninepRequestDst); err != nil {
+		return fmt.Errorf("failed to copy 9pvm-request source: %w", err)
 	}
 
 	// Detect docker or podman
@@ -521,6 +545,28 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 	hostsPath := filepath.Join(mountDir, "etc", "hosts")
 	if err := os.WriteFile(hostsPath, []byte("127.0.0.1\tlocalhost homura-vm\n::1\t\tlocalhost homura-vm\n"), 0644); err != nil {
 		slog.Warn("Failed to write hosts", "error", err)
+	}
+
+	// Create 9p auto-mount script
+	ninepScript := `#!/bin/sh
+# Auto-mount 9p filesystem if kernel params present
+if grep -q "p9.token=" /proc/cmdline; then
+    mkdir -p /mnt/host
+    mount -t 9p -o trans=tcp,port=5640 10.0.2.2 /mnt/host 2>/dev/null
+    if [ $? -eq 0 ]; then
+        echo "9p filesystem mounted at /mnt/host"
+    else
+        echo "Failed to mount 9p filesystem"
+    fi
+fi
+`
+	localDDir := filepath.Join(mountDir, "etc", "local.d")
+	if err := os.MkdirAll(localDDir, 0755); err != nil {
+		return fmt.Errorf("failed to create /etc/local.d: %w", err)
+	}
+	ninepScriptPath := filepath.Join(localDDir, "9pmount.start")
+	if err := os.WriteFile(ninepScriptPath, []byte(ninepScript), 0755); err != nil {
+		return fmt.Errorf("failed to write 9p mount script: %w", err)
 	}
 
 	// Copy SSH host keys

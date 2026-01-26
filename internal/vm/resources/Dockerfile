@@ -37,3 +37,12 @@ RUN sed -i 's/^#rc_sys=.*/rc_sys="lxc"/' /etc/rc.conf
 
 # Ensure ttys are available for login
 RUN sed -i 's/^#rc_tty_number=.*/rc_tty_number=0/' /etc/rc.conf
+
+# Build and install 9pvm-request
+COPY 9pvm-request /tmp/9pvm-request
+RUN cd /tmp/9pvm-request && \
+    go build -o /usr/local/bin/9pvm-request . && \
+    rm -rf /tmp/9pvm-request
+
+# Enable local service for 9p mount
+RUN rc-update add local default
