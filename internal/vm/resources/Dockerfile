@@ -38,6 +38,13 @@ RUN sed -i 's/^#rc_sys=.*/rc_sys="lxc"/' /etc/rc.conf
 # Ensure ttys are available for login
 RUN sed -i 's/^#rc_tty_number=.*/rc_tty_number=0/' /etc/rc.conf
 
+# Add ~/.local/bin to PATH for all shells
+RUN echo 'export PATH="$HOME/.local/bin:$PATH"' >> /etc/profile
+
+# Add ~/.local/bin to PATH for fish shell
+RUN mkdir -p /root/.config/fish && \
+    echo 'set -gx PATH $HOME/.local/bin $PATH' >> /root/.config/fish/config.fish
+
 # Build and install 9pvm-request
 COPY 9pvm-request /tmp/9pvm-request
 RUN cd /tmp/9pvm-request && \
