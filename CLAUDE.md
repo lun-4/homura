@@ -36,6 +36,44 @@ homura rm [branch-name]
 homura rm -f [branch-name]  # Force removal even with uncommitted changes
 ```
 
+## VM Customization
+
+You can customize the VM image by creating a custom Dockerfile at `~/.config/homura/Dockerfile.custom`:
+
+```bash
+# Create custom Dockerfile
+mkdir -p ~/.config/homura
+vim ~/.config/homura/Dockerfile.custom
+```
+
+Example customizations:
+
+```dockerfile
+FROM homura-vm-alpine-base:v4
+
+# Add packages
+RUN apk add --no-cache vim tmux ripgrep
+
+# Install Python packages
+RUN pip install --break-system-packages anthropic
+
+# Set environment variables
+ENV MY_VAR=value
+
+# Configure shell (fish is default)
+RUN echo 'set -gx MY_VAR value' >> /root/.config/fish/config.fish
+```
+
+The custom image is automatically built when you run `homura vm`. Images are cached based on file content (MD5 hash), so rebuilds only happen when you modify the Dockerfile.
+
+**Important:** The FROM line must match the current homura version. When homura is updated and the version changes, you must update the FROM line in your Dockerfile.custom or you'll get a version mismatch error with instructions on how to fix it.
+
+**Note:** You cannot use `COPY` in custom Dockerfiles to copy files from the host. Use 9p mounts instead:
+```bash
+homura 9p expose /path/to/files
+# Files accessible at /mnt/host inside VM
+```
+
 ## 9p Filesystem Passthrough
 
 homura VMs support 9p filesystem passthrough, allowing the VM to access host directories securely.

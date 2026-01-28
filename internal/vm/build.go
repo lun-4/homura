@@ -3,6 +3,7 @@ package vm
 import (
 	_ "embed"
 	"compress/gzip"
+	"crypto/md5"
 	"crypto/sha256"
 	"fmt"
 	"io"
@@ -55,12 +56,25 @@ func EnsureImages(sshPubKeyPath string) (*ImagePaths, error) {
 		return nil, fmt.Errorf("failed to get SSH keys directory: %w", err)
 	}
 
+	// Check for custom Dockerfile and calculate hash for rootfs filename
+	rootfsFilename := "rootfs.ext4"
+	customDockerfilePath := filepath.Join(os.Getenv("HOME"), ".config", "homura", "Dockerfile.custom")
+	if fileInfo, err := os.Stat(customDockerfilePath); err == nil && !fileInfo.IsDir() {
+		customContent, err := os.ReadFile(customDockerfilePath)
+		if err == nil {
+			hash := md5.Sum(customContent)
+			hashPrefix := fmt.Sprintf("%x", hash)[:6]
+			rootfsFilename = fmt.Sprintf("rootfs-%s.ext4", hashPrefix)
+			slog.Debug("Using custom rootfs filename", "filename", rootfsFilename, "hash", hashPrefix)
+		}
+	}
+
 	paths := &ImagePaths{
 		CacheDir:        cacheDir,
 		KernelPath:      filepath.Join(cacheDir, "vmlinuz-virt"),
 		InitramfsPath:   filepath.Join(cacheDir, "initramfs-virt"),
 		ModloopPath:     filepath.Join(cacheDir, "modloop-virt"),
-		RootfsPath:      filepath.Join(cacheDir, "rootfs.ext4"),
+		RootfsPath:      filepath.Join(cacheDir, rootfsFilename),
 		SSHHostKeysDir:  sshKeysDir,
 	}
 
@@ -451,12 +465,12 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 		dockerCmd = "podman"
 	}
 
-	// Build Docker image
-	slog.Info("Building Docker image (this may take a few minutes)")
-	imageName := "homura-alpine-vm:latest"
+	// Build Docker base image
+	slog.Info("Building Docker base image (this may take a few minutes)")
+	baseImageName := fmt.Sprintf("homura-vm-alpine-base:v%d", VMImplementationVersion)
 	cmd := exec.Command(dockerCmd, "build",
 		"--build-arg", fmt.Sprintf("SSH_PUB_KEY=%s", strings.TrimSpace(string(sshPubKey))),
-		"-t", imageName,
+		"-t", baseImageName,
 		tmpDir)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
@@ -464,12 +478,78 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 		return fmt.Errorf("docker build failed: %w", err)
 	}
 
+	// Determine final image to export
+	finalImageName := baseImageName
+
+	// Check for custom Dockerfile
+	customDockerfilePath := filepath.Join(os.Getenv("HOME"), ".config", "homura", "Dockerfile.custom")
+	if fileInfo, err := os.Stat(customDockerfilePath); err == nil && !fileInfo.IsDir() {
+		slog.Info("Found custom Dockerfile", "path", customDockerfilePath)
+
+		// Read custom Dockerfile contents
+		customContent, err := os.ReadFile(customDockerfilePath)
+		if err != nil {
+			return fmt.Errorf("read custom Dockerfile: %w", err)
+		}
+
+		// Validate FROM line matches current version
+		expectedFrom := fmt.Sprintf("FROM homura-vm-alpine-base:v%d", VMImplementationVersion)
+		if err := validateCustomDockerfileVersion(string(customContent), expectedFrom); err != nil {
+			return fmt.Errorf("invalid custom Dockerfile: %w\n\nPlease update %s:\n  Change the FROM line to: %s",
+				err, customDockerfilePath, expectedFrom)
+		}
+
+		// Calculate MD5 hash of file contents for cache key
+		hash := md5.Sum(customContent)
+		hashPrefix := fmt.Sprintf("%x", hash)[:6]
+		customImageName := fmt.Sprintf("homura-vm-alpine-custom:%s", hashPrefix)
+
+		// Check if custom image already exists
+		checkCmd := exec.Command(dockerCmd, "image", "inspect", customImageName)
+		if err := checkCmd.Run(); err != nil {
+			// Image doesn't exist, build it
+			slog.Info("Building custom image", "tag", customImageName, "hash", hashPrefix)
+
+			// Create temporary build directory
+			tmpCustomDir := filepath.Join(os.TempDir(), fmt.Sprintf("homura-custom-build-%s", hashPrefix))
+			if err := os.MkdirAll(tmpCustomDir, 0755); err != nil {
+				return fmt.Errorf("create temp custom build dir: %w", err)
+			}
+			defer os.RemoveAll(tmpCustomDir)
+
+			// Write user's Dockerfile as-is (no modification)
+			customDockerfile := filepath.Join(tmpCustomDir, "Dockerfile")
+			if err := os.WriteFile(customDockerfile, customContent, 0644); err != nil {
+				return fmt.Errorf("write custom Dockerfile: %w", err)
+			}
+
+			// Build custom image
+			buildCmd := exec.Command(dockerCmd, "build",
+				"-t", customImageName,
+				"-f", customDockerfile,
+				tmpCustomDir,
+			)
+			buildCmd.Stdout = os.Stderr
+			buildCmd.Stderr = os.Stderr
+
+			if err := buildCmd.Run(); err != nil {
+				return fmt.Errorf("build custom image: %w", err)
+			}
+
+			slog.Info("Custom image built successfully", "tag", customImageName)
+		} else {
+			slog.Info("Using cached custom image", "tag", customImageName)
+		}
+
+		finalImageName = customImageName
+	}
+
 	// Export container to tar
 	tarPath := filepath.Join(tmpDir, "rootfs.tar")
 	slog.Info("Exporting container to tar")
 
 	containerName := fmt.Sprintf("homura-temp-%x", sha256.Sum256([]byte(tarPath)))
-	cmd = exec.Command(dockerCmd, "create", "--name", containerName, imageName)
+	cmd = exec.Command(dockerCmd, "create", "--name", containerName, finalImageName)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("docker create failed: %w", err)
 	}
@@ -664,4 +744,39 @@ func copyTree(src, dst string) error {
 
 		return copyFile(path, dstPath)
 	})
+}
+
+// validateCustomDockerfileVersion checks that the FROM line matches expected base image version
+func validateCustomDockerfileVersion(content, expectedFrom string) error {
+	// Parse FROM line (handles comments and whitespace)
+	lines := strings.Split(content, "\n")
+	var fromLine string
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "FROM ") {
+			fromLine = trimmed
+			break
+		}
+	}
+
+	if fromLine == "" {
+		return fmt.Errorf("no FROM line found")
+	}
+
+	// Extract image name (before any AS alias)
+	parts := strings.Fields(fromLine)
+	if len(parts) < 2 {
+		return fmt.Errorf("invalid FROM line: %s", fromLine)
+	}
+
+	fromImage := parts[1]
+	expectedImage := strings.TrimPrefix(expectedFrom, "FROM ")
+
+	if fromImage != expectedImage {
+		return fmt.Errorf("base image version mismatch: found '%s', expected '%s'",
+			fromImage, expectedImage)
+	}
+
+	return nil
 }

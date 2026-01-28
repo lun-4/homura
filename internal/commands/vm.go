@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 
 	"github.com/lun-4/homura/internal/config"
@@ -55,6 +56,57 @@ func RunVM(cmd *cobra.Command, args []string, branchName string) error {
 	}
 
 	slog.Info("Running VM in copy", "branch", branchName, "path", copyPath)
+
+	// Create example custom Dockerfile if config directory doesn't exist
+	configDir := filepath.Join(os.Getenv("HOME"), ".config", "homura")
+	examplePath := filepath.Join(configDir, "Dockerfile.custom.example")
+
+	if _, err := os.Stat(examplePath); os.IsNotExist(err) {
+		os.MkdirAll(configDir, 0755)
+
+		exampleContent := fmt.Sprintf(`# homura VM Custom Dockerfile
+# This file extends the base VM image with your customizations
+# Copy to Dockerfile.custom and edit to apply changes
+#
+# IMPORTANT: The FROM line must match the current homura version
+# When homura updates, you must update this FROM line to match
+
+FROM homura-vm-alpine-base:v%d
+
+# Example: Add additional packages
+RUN apk add --no-cache \
+    vim \
+    neovim \
+    tmux \
+    ripgrep \
+    fd \
+    bat
+
+# Example: Install Python packages
+RUN pip install --break-system-packages \
+    anthropic \
+    requests \
+    numpy
+
+# Example: Set environment variables
+ENV MY_CUSTOM_VAR=value
+
+# Example: Add custom PATH entries
+RUN echo 'export PATH=$PATH:/custom/bin' >> /root/.profile
+
+# Example: Configure shell (fish is default)
+RUN echo 'set -gx MY_VAR value' >> /root/.config/fish/config.fish
+
+# Note: You cannot COPY files from host in this Dockerfile
+# Use 9p mounts instead: homura 9p expose /path/to/files
+`, vm.VMImplementationVersion)
+
+		if err := os.WriteFile(examplePath, []byte(exampleContent), 0644); err != nil {
+			slog.Warn("Failed to create example Dockerfile", "error", err)
+		} else {
+			slog.Info("Created example custom Dockerfile", "path", examplePath)
+		}
+	}
 
 	// Create new VM instance
 	vmInstance, err := vm.NewVM()

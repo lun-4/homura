@@ -13,4 +13,5 @@ package vm
 // 1 - Initial implementation with passt networking
 // 2 - Add ~/.local/bin to PATH for all shells
 // 3 - Add 9p filesystem passthrough support
-const VMImplementationVersion = 3
+// 4 - Add custom Dockerfile support with content-based image tagging
+const VMImplementationVersion = 4
