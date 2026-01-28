@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"hash/fnv"
 	"log"
 	"syscall"
 	"time"
@@ -42,7 +41,7 @@ func (n *NinePNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 	}
 
 	// Get attributes to check if it exists
-	_, attr, err := n.client.GetAttr(childPath)
+	qid, attr, err := n.client.GetAttr(childPath)
 	if err != nil {
 		log.Printf("Lookup failed for %s: %v", childPath, err)
 		return nil, syscall.ENOENT
@@ -57,10 +56,10 @@ func (n *NinePNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 	// Fill entry attributes
 	fillEntryOut(out, attr)
 
-	// Add to tree
+	// Add to tree - use QID.Path as inode (this is the host filesystem's inode)
 	return n.Inode.NewInode(ctx, child, fs.StableAttr{
 		Mode: modeToFileMode(attr.Mode),
-		Ino:  pathToInode(childPath),
+		Ino:  qid.Path,
 	}), 0
 }
 
@@ -173,19 +172,6 @@ func (fh *NinePFileHandle) Release(ctx context.Context) syscall.Errno {
 }
 
 // Helper functions
-
-func pathToInode(path string) uint64 {
-	// Hash the path to create a unique inode number
-	h := fnv.New64a()
-	h.Write([]byte(path))
-	ino := h.Sum64()
-
-	// Ensure we never return 0 or 1 (reserved inodes)
-	if ino == 0 || ino == 1 {
-		return 2
-	}
-	return ino
-}
 
 func modeToFileMode(mode p9.FileMode) uint32 {
 	// Convert p9 mode to Unix mode
