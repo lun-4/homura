@@ -136,20 +136,69 @@ RUN echo 'set -gx MY_VAR value' >> /root/.config/fish/config.fish
 }
 
 // VMSsh implements the `homura vm ssh` command
-func VMSsh(cmd *cobra.Command, args []string) error {
+func VMSsh(cmd *cobra.Command, args []string, branchName string) error {
+	var workDir string
+
 	// Get current working directory
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("failed to get current directory: %w", err)
 	}
 
+	if branchName != "" {
+		// Branch name provided - resolve to copy path
+		// Validate we're in a git repo
+		repoRoot, err := git.GetRepoRoot(cwd)
+		if err != nil {
+			return fmt.Errorf("not a git repository: %w", err)
+		}
+
+		// Get copy path for the specified branch
+		copyPath := git.GetCopyPath(repoRoot, branchName)
+
+		// Check if copy exists
+		if _, err := os.Stat(copyPath); os.IsNotExist(err) {
+			return fmt.Errorf("copy does not exist at %s\nRun 'homura clone %s' first", copyPath, branchName)
+		}
+
+		workDir = copyPath
+	} else {
+		// No branch provided - try default branch first, then fall back to cwd
+		repoRoot, err := git.GetRepoRoot(cwd)
+		if err == nil {
+			// We're in a git repo, check for default branch
+			state, err := config.LoadState(repoRoot)
+			if err == nil && state.DefaultBranch != "" {
+				// Default branch is set, use it
+				copyPath := git.GetCopyPath(repoRoot, state.DefaultBranch)
+				if _, err := os.Stat(copyPath); err == nil {
+					// Copy exists, use it
+					workDir = copyPath
+					slog.Debug("Using default branch", "branch", state.DefaultBranch)
+				} else {
+					// Copy doesn't exist, fall back to cwd
+					workDir = cwd
+					slog.Debug("Default branch copy doesn't exist, using cwd")
+				}
+			} else {
+				// No default branch, use cwd
+				workDir = cwd
+				slog.Debug("No default branch set, using cwd")
+			}
+		} else {
+			// Not in a git repo, just use cwd
+			workDir = cwd
+			slog.Debug("Not in a git repo, using cwd")
+		}
+	}
+
 	// Find the running VM for this working directory
-	slot, err := vm.FindVMByWorkDir(cwd)
+	slot, err := vm.FindVMByWorkDir(workDir)
 	if err != nil {
 		return fmt.Errorf("failed to find VM: %w", err)
 	}
 
-	slog.Info("Connecting to VM", "ip", slot.IPAddress, "ssh_port", slot.PortStart, "working_dir", cwd)
+	slog.Info("Connecting to VM", "ip", slot.IPAddress, "ssh_port", slot.PortStart, "working_dir", workDir)
 
 	// Use syscall.Exec to replace the current process with SSH
 	// This gives the user a clean SSH session

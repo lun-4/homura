@@ -78,10 +78,16 @@ var vmCmd = &cobra.Command{
 }
 
 var vmSshCmd = &cobra.Command{
-	Use:   "ssh",
-	Short: "SSH into the VM running for the current directory",
-	Args:  cobra.NoArgs,
-	RunE:  commands.VMSsh,
+	Use:   "ssh [branch]",
+	Short: "SSH into the VM (uses branch arg, then default branch, then current directory)",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		branchName := ""
+		if len(args) > 0 {
+			branchName = args[0]
+		}
+		return commands.VMSsh(cmd, args, branchName)
+	},
 }
 
 var ninepCmd = &cobra.Command{
