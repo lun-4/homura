@@ -51,6 +51,12 @@ RUN cd /tmp/9pvm-request && \
     go build -o /usr/local/bin/9pvm-request . && \
     rm -rf /tmp/9pvm-request
 
+# Build and install test-fs
+COPY test-fs /tmp/test-fs
+RUN cd /tmp/test-fs && \
+    go build -o /usr/local/bin/test-fs . && \
+    rm -rf /tmp/test-fs
+
 # Build and install 9pfuse
 COPY 9pfuse /tmp/9pfuse
 RUN cd /tmp/9pfuse && \

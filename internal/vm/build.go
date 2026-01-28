@@ -54,18 +54,8 @@ func EnsureImages(sshPubKeyPath string) (*ImagePaths, error) {
 		return nil, fmt.Errorf("failed to get SSH keys directory: %w", err)
 	}
 
-	// Check for custom Dockerfile and calculate hash for rootfs filename
+	// Rootfs filename - will be updated later if custom Dockerfile exists
 	rootfsFilename := "rootfs.ext4"
-	customDockerfilePath := filepath.Join(os.Getenv("HOME"), ".config", "homura", "Dockerfile.custom")
-	if fileInfo, err := os.Stat(customDockerfilePath); err == nil && !fileInfo.IsDir() {
-		customContent, err := os.ReadFile(customDockerfilePath)
-		if err == nil {
-			hash := md5.Sum(customContent)
-			hashPrefix := fmt.Sprintf("%x", hash)[:6]
-			rootfsFilename = fmt.Sprintf("rootfs-%s.ext4", hashPrefix)
-			slog.Debug("Using custom rootfs filename", "filename", rootfsFilename, "hash", hashPrefix)
-		}
-	}
 
 	paths := &ImagePaths{
 		CacheDir:        cacheDir,
@@ -475,6 +465,16 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 		return fmt.Errorf("failed to copy 9pfuse source: %w", err)
 	}
 
+	// Copy test-fs source for Docker build from cache directory
+	testfsSrc := filepath.Join(homeDir, ".cache", "homura", "src", "test-fs")
+	if _, err := os.Stat(testfsSrc); os.IsNotExist(err) {
+		return fmt.Errorf("test-fs source not found at %s (run 'make 9p' to install)", testfsSrc)
+	}
+	testfsDst := filepath.Join(tmpDir, "test-fs")
+	if err := copyTree(testfsSrc, testfsDst); err != nil {
+		return fmt.Errorf("failed to copy test-fs source: %w", err)
+	}
+
 
 	// Detect docker or podman
 	dockerCmd := "docker"
@@ -498,8 +498,27 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 	// Determine final image to export
 	finalImageName := baseImageName
 
-	// Check for custom Dockerfile
+	// Get base image ID for cache busting
+	baseImageID, err := getImageID(dockerCmd, baseImageName)
+	if err != nil {
+		return fmt.Errorf("failed to get base image ID: %w", err)
+	}
+
+	// Update rootfs filename if custom Dockerfile exists
 	customDockerfilePath := filepath.Join(os.Getenv("HOME"), ".config", "homura", "Dockerfile.custom")
+	if fileInfo, err := os.Stat(customDockerfilePath); err == nil && !fileInfo.IsDir() {
+		if customContent, err := os.ReadFile(customDockerfilePath); err == nil {
+			combinedHash := hashCustomImage(customContent, baseImageID)
+			newRootfsFilename := fmt.Sprintf("rootfs-%s.ext4", combinedHash)
+
+			// Update paths.RootfsPath
+			paths.RootfsPath = filepath.Join(paths.CacheDir, newRootfsFilename)
+			slog.Debug("Using custom rootfs filename", "filename", newRootfsFilename, "hash", combinedHash)
+		}
+	}
+
+	// Check for custom Dockerfile
+	customDockerfilePath = filepath.Join(os.Getenv("HOME"), ".config", "homura", "Dockerfile.custom")
 	if fileInfo, err := os.Stat(customDockerfilePath); err == nil && !fileInfo.IsDir() {
 		slog.Info("Found custom Dockerfile", "path", customDockerfilePath)
 
@@ -516,19 +535,19 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 				err, customDockerfilePath, expectedFrom)
 		}
 
-		// Calculate MD5 hash of file contents for cache key
-		hash := md5.Sum(customContent)
-		hashPrefix := fmt.Sprintf("%x", hash)[:6]
-		customImageName := fmt.Sprintf("homura-vm-alpine-custom:%s", hashPrefix)
+		// Calculate hash combining Dockerfile content + base image ID
+		// This ensures rebuild when either the custom Dockerfile OR base image changes
+		combinedHash := hashCustomImage(customContent, baseImageID)
+		customImageName := fmt.Sprintf("homura-vm-alpine-custom:%s", combinedHash)
 
 		// Check if custom image already exists
 		checkCmd := exec.Command(dockerCmd, "image", "inspect", customImageName)
 		if err := checkCmd.Run(); err != nil {
 			// Image doesn't exist, build it
-			slog.Info("Building custom image", "tag", customImageName, "hash", hashPrefix)
+			slog.Info("Building custom image", "tag", customImageName, "hash", combinedHash)
 
 			// Create temporary build directory
-			tmpCustomDir := filepath.Join(os.TempDir(), fmt.Sprintf("homura-custom-build-%s", hashPrefix))
+			tmpCustomDir := filepath.Join(os.TempDir(), fmt.Sprintf("homura-custom-build-%s", combinedHash))
 			if err := os.MkdirAll(tmpCustomDir, 0755); err != nil {
 				return fmt.Errorf("create temp custom build dir: %w", err)
 			}
@@ -881,4 +900,33 @@ func validateCustomDockerfileVersion(content, expectedFrom string) error {
 	}
 
 	return nil
+}
+
+// getImageID retrieves the image ID for a given image name/tag
+func getImageID(dockerCmd, imageName string) (string, error) {
+	cmd := exec.Command(dockerCmd, "image", "inspect", "--format={{.Id}}", imageName)
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to inspect image %s: %w", imageName, err)
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+// hashCustomImage creates a combined hash of the custom Dockerfile content and base image ID
+// This ensures the custom image rebuilds when either the Dockerfile OR the base image changes
+func hashCustomImage(dockerfileContent []byte, baseImageID string) string {
+	// Hash the Dockerfile content
+	contentHash := md5.Sum(dockerfileContent)
+	contentHashStr := fmt.Sprintf("%x", contentHash)
+
+	// Hash the base image ID
+	baseImageHash := md5.Sum([]byte(baseImageID))
+	baseImageHashStr := fmt.Sprintf("%x", baseImageHash)
+
+	// Combine both hashes and hash again
+	combined := contentHashStr + baseImageHashStr
+	finalHash := md5.Sum([]byte(combined))
+
+	// Return first 6 characters for brevity
+	return fmt.Sprintf("%x", finalHash)[:6]
 }

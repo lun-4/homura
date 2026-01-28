@@ -14,5 +14,6 @@ package vm
 // 2 - Add ~/.local/bin to PATH for all shells
 // 3 - Add 9p filesystem passthrough support
 // 4 - Add custom Dockerfile support with content-based image tagging
-// 5 - Replace kernel v9fs with FUSE 9pfuse driver, add mmap support
-const VMImplementationVersion = 5
+// 5 - Replace kernel v9fs with FUSE 9pfuse driver, add complete filesystem operations
+// 6 - Add test-fs filesystem validation tool
+const VMImplementationVersion = 6

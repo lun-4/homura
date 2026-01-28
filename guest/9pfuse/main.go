@@ -18,13 +18,16 @@ func main() {
 	// Parse flags
 	serverAddr := flag.String("server", defaultServerAddr, "9p server address")
 	mountpoint := flag.String("mount", defaultMountpoint, "FUSE mount point")
-	debug := flag.Bool("debug", false, "Enable debug logging")
 	flag.Parse()
 
-	// Setup logging
-	if !*debug {
-		log.SetFlags(0)
+	// Setup logging to file
+	logFile, err := os.OpenFile("/tmp/9pfuse.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.Fatalf("Failed to open log file: %v", err)
 	}
+	defer logFile.Close()
+	log.SetOutput(logFile)
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
 
 	log.Printf("Starting 9pfuse...")
 	log.Printf("Connecting to 9p server at %s", *serverAddr)

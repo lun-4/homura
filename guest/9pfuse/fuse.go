@@ -32,6 +32,16 @@ var _ fs.NodeOpener = (*NinePNode)(nil)
 var _ fs.NodeReaddirer = (*NinePNode)(nil)
 var _ fs.NodeGetattrer = (*NinePNode)(nil)
 var _ fs.NodeLookuper = (*NinePNode)(nil)
+var _ fs.NodeReadlinker = (*NinePNode)(nil)
+var _ fs.NodeCreater = (*NinePNode)(nil)
+var _ fs.NodeMkdirer = (*NinePNode)(nil)
+var _ fs.NodeUnlinker = (*NinePNode)(nil)
+var _ fs.NodeRmdirer = (*NinePNode)(nil)
+var _ fs.NodeRenamer = (*NinePNode)(nil)
+var _ fs.NodeSetattrer = (*NinePNode)(nil)
+var _ fs.NodeSymlinker = (*NinePNode)(nil)
+var _ fs.NodeLinker = (*NinePNode)(nil)
+var _ fs.NodeStatfser = (*NinePNode)(nil)
 
 // Lookup looks up a child entry
 func (n *NinePNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
@@ -40,12 +50,16 @@ func (n *NinePNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 		childPath = "/" + name
 	}
 
+	log.Printf("Lookup: looking up %s", childPath)
+
 	// Get attributes to check if it exists
-	qid, attr, err := n.client.GetAttr(childPath)
+	_, attr, err := n.client.GetAttr(childPath)
 	if err != nil {
-		log.Printf("Lookup failed for %s: %v", childPath, err)
+		log.Printf("Lookup FAILED for %s: %v", childPath, err)
 		return nil, syscall.ENOENT
 	}
+
+	log.Printf("Lookup SUCCESS for %s", childPath)
 
 	// Create child node
 	child := &NinePNode{
@@ -56,10 +70,11 @@ func (n *NinePNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 	// Fill entry attributes
 	fillEntryOut(out, attr)
 
-	// Add to tree - use QID.Path as inode (this is the host filesystem's inode)
+	// Add to tree - use 0 to let FUSE generate stable inodes
+	// (using host inode causes conflicts after rename)
 	return n.Inode.NewInode(ctx, child, fs.StableAttr{
 		Mode: modeToFileMode(attr.Mode),
-		Ino:  qid.Path,
+		Ino:  0,
 	}), 0
 }
 
@@ -95,6 +110,281 @@ func (n *NinePNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint
 
 	// Return with FOPEN_KEEP_CACHE to enable caching
 	return fh, fuse.FOPEN_KEEP_CACHE, 0
+}
+
+// Readlink reads the target of a symbolic link
+func (n *NinePNode) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
+	target, err := n.client.Readlink(n.path)
+	if err != nil {
+		log.Printf("Readlink failed for %s: %v", n.path, err)
+		return nil, syscall.EIO
+	}
+	return []byte(target), 0
+}
+
+// Create creates a new file
+func (n *NinePNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
+	childPath := n.path + "/" + name
+	if n.path == "/" {
+		childPath = "/" + name
+	}
+
+	// Create the file via 9p
+	fid, _, err := n.client.Create(childPath, p9.FileMode(mode), flags)
+	if err != nil {
+		log.Printf("Create failed for %s: %v", childPath, err)
+		return nil, nil, 0, syscall.EIO
+	}
+
+	// Create child node
+	child := &NinePNode{
+		client: n.client,
+		path:   childPath,
+	}
+
+	// Create file handle
+	fh := &NinePFileHandle{
+		client: n.client,
+		path:   childPath,
+		fid:    fid,
+	}
+
+	// Fill entry attributes (use defaults for newly created file)
+	out.Attr.Mode = mode
+	out.Attr.Size = 0
+	out.SetEntryTimeout(0)
+	out.SetAttrTimeout(0)
+
+	return n.Inode.NewInode(ctx, child, fs.StableAttr{
+		Mode: mode,
+		Ino:  0,
+	}), fh, fuse.FOPEN_KEEP_CACHE, 0
+}
+
+// Mkdir creates a new directory
+func (n *NinePNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	childPath := n.path + "/" + name
+	if n.path == "/" {
+		childPath = "/" + name
+	}
+
+	// Create directory via 9p
+	_, err := n.client.Mkdir(childPath, p9.FileMode(mode|syscall.S_IFDIR))
+	if err != nil {
+		log.Printf("Mkdir failed for %s: %v", childPath, err)
+		return nil, syscall.EIO
+	}
+
+	// Create child node
+	child := &NinePNode{
+		client: n.client,
+		path:   childPath,
+	}
+
+	// Fill entry attributes
+	out.Attr.Mode = mode | syscall.S_IFDIR
+	out.Attr.Size = 0
+	out.SetEntryTimeout(0)
+	out.SetAttrTimeout(0)
+
+	return n.Inode.NewInode(ctx, child, fs.StableAttr{
+		Mode: mode | syscall.S_IFDIR,
+		Ino:  0,
+	}), 0
+}
+
+// Unlink removes a file
+func (n *NinePNode) Unlink(ctx context.Context, name string) syscall.Errno {
+	childPath := n.path + "/" + name
+	if n.path == "/" {
+		childPath = "/" + name
+	}
+
+	if err := n.client.Unlink(childPath); err != nil {
+		log.Printf("Unlink failed for %s: %v", childPath, err)
+		return syscall.EIO
+	}
+
+	return 0
+}
+
+// Rmdir removes a directory
+func (n *NinePNode) Rmdir(ctx context.Context, name string) syscall.Errno {
+	childPath := n.path + "/" + name
+	if n.path == "/" {
+		childPath = "/" + name
+	}
+
+	if err := n.client.Unlink(childPath); err != nil {
+		log.Printf("Rmdir failed for %s: %v", childPath, err)
+		return syscall.EIO
+	}
+
+	return 0
+}
+
+// Rename renames/moves a file or directory
+func (n *NinePNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
+	oldPath := n.path + "/" + name
+	if n.path == "/" {
+		oldPath = "/" + name
+	}
+
+	newParentNode, ok := newParent.(*NinePNode)
+	if !ok {
+		log.Printf("Rename: newParent is not *NinePNode")
+		return syscall.EIO
+	}
+
+	newPath := newParentNode.path + "/" + newName
+	if newParentNode.path == "/" {
+		newPath = "/" + newName
+	}
+
+	log.Printf("Rename: %s -> %s", oldPath, newPath)
+
+	if err := n.client.Rename(oldPath, newPath); err != nil {
+		log.Printf("Rename failed from %s to %s: %v", oldPath, newPath, err)
+		return syscall.EIO
+	}
+
+	log.Printf("Rename succeeded: %s -> %s", oldPath, newPath)
+	return 0
+}
+
+// Setattr changes file attributes
+func (n *NinePNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+	// Handle truncate
+	if in.Valid&fuse.FATTR_SIZE != 0 {
+		if err := n.client.Truncate(n.path, in.Size); err != nil {
+			log.Printf("Truncate failed for %s: %v", n.path, err)
+			return syscall.EIO
+		}
+	}
+
+	// Handle chmod
+	if in.Valid&fuse.FATTR_MODE != 0 {
+		if err := n.client.Chmod(n.path, p9.FileMode(in.Mode)); err != nil {
+			log.Printf("Chmod failed for %s: %v", n.path, err)
+			return syscall.EIO
+		}
+	}
+
+	// Handle chown (UID/GID)
+	if (in.Valid&fuse.FATTR_UID != 0) || (in.Valid&fuse.FATTR_GID != 0) {
+		uid := int(in.Uid)
+		gid := int(in.Gid)
+		if err := n.client.Chown(n.path, uid, gid); err != nil {
+			log.Printf("Chown failed for %s: %v", n.path, err)
+			// Don't fail on chown errors - many filesystems ignore this
+		}
+	}
+
+	// Handle utimens (modify/access times)
+	if (in.Valid&fuse.FATTR_MTIME != 0) || (in.Valid&fuse.FATTR_ATIME != 0) {
+		atime := time.Unix(int64(in.Atime), int64(in.Atimensec))
+		mtime := time.Unix(int64(in.Mtime), int64(in.Mtimensec))
+		if err := n.client.Utimens(n.path, atime, mtime); err != nil {
+			log.Printf("Utimens failed for %s: %v", n.path, err)
+			// Don't fail on utimens errors
+		}
+	}
+
+	// Refresh attributes and return them
+	return n.Getattr(ctx, f, out)
+}
+
+// Symlink creates a symbolic link
+func (n *NinePNode) Symlink(ctx context.Context, target, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	linkPath := n.path + "/" + name
+	if n.path == "/" {
+		linkPath = "/" + name
+	}
+
+	// Create symlink via 9p
+	_, err := n.client.Symlink(linkPath, target)
+	if err != nil {
+		log.Printf("Symlink failed for %s -> %s: %v", linkPath, target, err)
+		return nil, syscall.EIO
+	}
+
+	// Create child node
+	child := &NinePNode{
+		client: n.client,
+		path:   linkPath,
+	}
+
+	// Fill entry attributes
+	out.Attr.Mode = syscall.S_IFLNK | 0777
+	out.Attr.Size = uint64(len(target))
+	out.SetEntryTimeout(0)
+	out.SetAttrTimeout(0)
+
+	return n.Inode.NewInode(ctx, child, fs.StableAttr{
+		Mode: syscall.S_IFLNK | 0777,
+		Ino:  0,
+	}), 0
+}
+
+// Link creates a hard link
+func (n *NinePNode) Link(ctx context.Context, target fs.InodeEmbedder, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	targetNode, ok := target.(*NinePNode)
+	if !ok {
+		return nil, syscall.EIO
+	}
+
+	linkPath := n.path + "/" + name
+	if n.path == "/" {
+		linkPath = "/" + name
+	}
+
+	// Create hard link via 9p
+	_, err := n.client.Link(linkPath, targetNode.path)
+	if err != nil {
+		log.Printf("Link failed for %s -> %s: %v", linkPath, targetNode.path, err)
+		return nil, syscall.EIO
+	}
+
+	// Create child node (same inode as target)
+	child := &NinePNode{
+		client: n.client,
+		path:   linkPath,
+	}
+
+	// Get target attributes
+	_, attr, err := n.client.GetAttr(targetNode.path)
+	if err != nil {
+		return nil, syscall.EIO
+	}
+
+	// Fill entry attributes
+	fillEntryOut(out, attr)
+
+	return n.Inode.NewInode(ctx, child, fs.StableAttr{
+		Mode: modeToFileMode(attr.Mode),
+		Ino:  0,
+	}), 0
+}
+
+// Statfs returns filesystem statistics
+func (n *NinePNode) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errno {
+	// Get filesystem stats via 9p
+	stats, err := n.client.Statfs(n.path)
+	if err != nil {
+		log.Printf("Statfs failed for %s: %v", n.path, err)
+		return syscall.EIO
+	}
+
+	out.Blocks = stats.Blocks
+	out.Bfree = stats.BlocksFree
+	out.Bavail = stats.BlocksAvailable
+	out.Files = stats.Files
+	out.Ffree = stats.FilesFree
+	out.Bsize = uint32(stats.BlockSize)
+	out.NameLen = uint32(stats.NameLength)
+	out.Frsize = uint32(stats.BlockSize)
+
+	return 0
 }
 
 // Readdir reads directory entries
@@ -139,6 +429,8 @@ type NinePFileHandle struct {
 var _ fs.FileReader = (*NinePFileHandle)(nil)
 var _ fs.FileWriter = (*NinePFileHandle)(nil)
 var _ fs.FileReleaser = (*NinePFileHandle)(nil)
+var _ fs.FileFsyncer = (*NinePFileHandle)(nil)
+var _ fs.FileFlusher = (*NinePFileHandle)(nil)
 
 // Read reads from the file
 func (fh *NinePFileHandle) Read(ctx context.Context, dest []byte, offset int64) (fuse.ReadResult, syscall.Errno) {
@@ -153,12 +445,14 @@ func (fh *NinePFileHandle) Read(ctx context.Context, dest []byte, offset int64) 
 
 // Write writes to the file
 func (fh *NinePFileHandle) Write(ctx context.Context, data []byte, offset int64) (uint32, syscall.Errno) {
+	log.Printf("Write called: path=%s, fid=%d, offset=%d, len=%d", fh.path, fh.fid, offset, len(data))
 	n, err := fh.client.WriteAt(fh.fid, data, uint64(offset))
 	if err != nil {
-		log.Printf("Write failed for %s at offset %d: %v", fh.path, offset, err)
+		log.Printf("Write FAILED for %s (fid=%d) at offset %d, len=%d: %v", fh.path, fh.fid, offset, len(data), err)
 		return 0, syscall.EIO
 	}
 
+	log.Printf("Write succeeded: path=%s, wrote %d bytes", fh.path, n)
 	return uint32(n), 0
 }
 
@@ -167,6 +461,25 @@ func (fh *NinePFileHandle) Release(ctx context.Context) syscall.Errno {
 	if err := fh.client.CloseFID(fh.fid); err != nil {
 		log.Printf("Release failed for %s: %v", fh.path, err)
 		return syscall.EIO
+	}
+	return 0
+}
+
+// Fsync syncs file data to storage
+func (fh *NinePFileHandle) Fsync(ctx context.Context, flags uint32) syscall.Errno {
+	if err := fh.client.Fsync(fh.fid); err != nil {
+		log.Printf("Fsync failed for %s: %v", fh.path, err)
+		return syscall.EIO
+	}
+	return 0
+}
+
+// Flush is called when a file descriptor is closed
+func (fh *NinePFileHandle) Flush(ctx context.Context) syscall.Errno {
+	// Flush any cached writes
+	if err := fh.client.Fsync(fh.fid); err != nil {
+		log.Printf("Flush failed for %s: %v", fh.path, err)
+		// Don't fail on flush errors
 	}
 	return 0
 }
@@ -198,8 +511,8 @@ func fillAttrOut(out *fuse.AttrOut, attr p9.Attr) {
 	out.Mtimensec = uint32(attr.MTimeNanoSeconds)
 	out.Ctimensec = uint32(attr.CTimeNanoSeconds)
 
-	// Set cache timeout
-	out.SetTimeout(1 * time.Second)
+	// Disable caching to avoid stale data after operations like rename
+	out.SetTimeout(0)
 }
 
 func fillEntryOut(out *fuse.EntryOut, attr p9.Attr) {
@@ -212,8 +525,9 @@ func fillEntryOut(out *fuse.EntryOut, attr p9.Attr) {
 	out.Attr.Mtimensec = uint32(attr.MTimeNanoSeconds)
 	out.Attr.Ctimensec = uint32(attr.CTimeNanoSeconds)
 
-	out.SetEntryTimeout(1 * time.Second)
-	out.SetAttrTimeout(1 * time.Second)
+	// Disable caching to avoid stale data after operations like rename
+	out.SetEntryTimeout(0)
+	out.SetAttrTimeout(0)
 }
 
 func flagsToP9(flags uint32) p9.OpenFlags {

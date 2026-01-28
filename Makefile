@@ -12,18 +12,23 @@ build:
 	cd 9passthrough && go build -o ~/.cache/homura/bin/9passthrough .
 	cd 9pvm-request && go build -o ~/.cache/homura/bin/9pvm-request .
 	cd guest/9pfuse && go build -o ~/.cache/homura/bin/9pfuse .
+	cd test-fs && go build -o ~/.cache/homura/bin/test-fs .
 	@rm -rf ~/.cache/homura/src/9pvm-request
 	@rm -rf ~/.cache/homura/src/9pfuse
+	@rm -rf ~/.cache/homura/src/test-fs
 	@cp -r 9pvm-request ~/.cache/homura/src/
 	@cp -r guest/9pfuse ~/.cache/homura/src/
+	@cp -r test-fs ~/.cache/homura/src/
 	@echo "✓ 9passthrough binary: ~/.cache/homura/bin/9passthrough"
 	@echo "✓ 9pvm-request binary: ~/.cache/homura/bin/9pvm-request"
 	@echo "✓ 9pfuse binary: ~/.cache/homura/bin/9pfuse"
+	@echo "✓ test-fs binary: ~/.cache/homura/bin/test-fs"
 	@echo "✓ 9pvm-request source: ~/.cache/homura/src/9pvm-request/"
 	@echo "✓ 9pfuse source: ~/.cache/homura/src/9pfuse/"
+	@echo "✓ test-fs source: ~/.cache/homura/src/test-fs/"
 
 test:
-	cd 9passthrough && go test -v .
+	cd 9passthrough && go test -v -count=1 .
 
 clean:
 	rm -vf homura

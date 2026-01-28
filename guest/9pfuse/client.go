@@ -3,7 +3,10 @@ package main
 import (
 	"fmt"
 	"net"
+	"path/filepath"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/hugelgupf/p9/p9"
 )
@@ -184,6 +187,28 @@ func (c *P9Client) WriteAt(fid uint32, data []byte, offset uint64) (int, error) 
 	return file.WriteAt(data, int64(offset))
 }
 
+// Readlink reads the target of a symbolic link
+func (c *P9Client) Readlink(path string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Walk to the symlink
+	names := parsePath(path)
+	_, file, err := c.root.Walk(names)
+	if err != nil {
+		return "", fmt.Errorf("walk failed for %s: %w", path, err)
+	}
+	defer file.Close()
+
+	// Read the symlink target
+	target, err := file.Readlink()
+	if err != nil {
+		return "", fmt.Errorf("readlink failed for %s: %w", path, err)
+	}
+
+	return target, nil
+}
+
 // Readdir reads directory entries
 func (c *P9Client) Readdir(path string) ([]p9.Dirent, error) {
 	file, err := c.Walk(path)
@@ -216,6 +241,327 @@ func (c *P9Client) Readdir(path string) ([]p9.Dirent, error) {
 	}
 
 	return entries, nil
+}
+
+// Create creates a new file
+func (c *P9Client) Create(path string, mode p9.FileMode, flags uint32) (uint32, p9.QID, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Get parent directory
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+
+	// Walk to parent
+	names := parsePath(dir)
+	_, parent, err := c.root.Walk(names)
+	if err != nil {
+		return 0, p9.QID{}, fmt.Errorf("walk to parent %s failed: %w", dir, err)
+	}
+	// NOTE: Do NOT defer parent.Close() here!
+	// After Create() is called, parent BECOMES the created file handle.
+	// We need to keep it open for writes.
+
+	// Create file
+	p9Flags := flagsToP9Create(flags)
+	createdFile, qid, _, err := parent.Create(base, p9Flags, mode.Permissions(), p9.UID(0), p9.GID(0))
+	if err != nil {
+		parent.Close() // Close only on error
+		return 0, p9.QID{}, fmt.Errorf("create %s failed: %w", path, err)
+	}
+
+	// Allocate FID and store the created file
+	// Note: createdFile is actually the parent file handle, which now represents the created file
+	fid := c.allocateFID()
+	c.files[fid] = createdFile
+
+	return fid, qid, nil
+}
+
+// flagsToP9Create converts FUSE create flags to p9 OpenFlags
+func flagsToP9Create(flags uint32) p9.OpenFlags {
+	// Convert access mode
+	accMode := flags & syscall.O_ACCMODE
+
+	switch accMode {
+	case syscall.O_RDONLY:
+		return p9.ReadOnly
+	case syscall.O_WRONLY:
+		return p9.WriteOnly
+	case syscall.O_RDWR:
+		return p9.ReadWrite
+	default:
+		return p9.ReadWrite // Default to read-write for creation to be safe
+	}
+}
+
+// Mkdir creates a new directory
+func (c *P9Client) Mkdir(path string, mode p9.FileMode) (p9.QID, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Get parent directory
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+
+	// Walk to parent
+	names := parsePath(dir)
+	_, parent, err := c.root.Walk(names)
+	if err != nil {
+		return p9.QID{}, fmt.Errorf("walk to parent %s failed: %w", dir, err)
+	}
+	defer parent.Close()
+
+	// Create directory
+	qid, err := parent.Mkdir(base, mode.Permissions(), p9.UID(0), p9.GID(0))
+	if err != nil {
+		return p9.QID{}, fmt.Errorf("mkdir %s failed: %w", path, err)
+	}
+
+	return qid, nil
+}
+
+// Unlink removes a file or directory
+func (c *P9Client) Unlink(path string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Get parent directory
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+
+	// Walk to parent
+	names := parsePath(dir)
+	_, parent, err := c.root.Walk(names)
+	if err != nil {
+		return fmt.Errorf("walk to parent %s failed: %w", dir, err)
+	}
+	defer parent.Close()
+
+	// Unlink (removes both files and directories)
+	if err := parent.UnlinkAt(base, 0); err != nil {
+		return fmt.Errorf("unlink %s failed: %w", path, err)
+	}
+
+	return nil
+}
+
+// Rename renames/moves a file
+func (c *P9Client) Rename(oldPath, newPath string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Get old parent
+	oldDir := filepath.Dir(oldPath)
+	oldBase := filepath.Base(oldPath)
+
+	// Get new parent
+	newDir := filepath.Dir(newPath)
+	newBase := filepath.Base(newPath)
+
+	// Walk to old parent
+	oldNames := parsePath(oldDir)
+	_, oldParent, err := c.root.Walk(oldNames)
+	if err != nil {
+		return fmt.Errorf("walk to old parent %s failed: %w", oldDir, err)
+	}
+	defer oldParent.Close()
+
+	// Walk to new parent
+	newNames := parsePath(newDir)
+	_, newParent, err := c.root.Walk(newNames)
+	if err != nil {
+		return fmt.Errorf("walk to new parent %s failed: %w", newDir, err)
+	}
+	defer newParent.Close()
+
+	// Rename
+	if err := oldParent.RenameAt(oldBase, newParent, newBase); err != nil {
+		return fmt.Errorf("rename %s to %s failed: %w", oldPath, newPath, err)
+	}
+
+	return nil
+}
+
+// Truncate truncates a file to a specific size
+func (c *P9Client) Truncate(path string, size uint64) error {
+	file, err := c.Walk(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	// Use SetAttr to change size
+	return file.SetAttr(p9.SetAttrMask{Size: true}, p9.SetAttr{Size: size})
+}
+
+// Chmod changes file permissions
+func (c *P9Client) Chmod(path string, mode p9.FileMode) error {
+	file, err := c.Walk(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	return file.SetAttr(p9.SetAttrMask{Permissions: true}, p9.SetAttr{Permissions: mode.Permissions()})
+}
+
+// Chown changes file ownership
+func (c *P9Client) Chown(path string, uid, gid int) error {
+	file, err := c.Walk(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	mask := p9.SetAttrMask{}
+	attr := p9.SetAttr{}
+
+	if uid >= 0 {
+		mask.UID = true
+		attr.UID = p9.UID(uid)
+	}
+	if gid >= 0 {
+		mask.GID = true
+		attr.GID = p9.GID(gid)
+	}
+
+	return file.SetAttr(mask, attr)
+}
+
+// Utimens changes access and modification times
+func (c *P9Client) Utimens(path string, atime, mtime time.Time) error {
+	file, err := c.Walk(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	return file.SetAttr(
+		p9.SetAttrMask{ATime: true, ATimeNotSystemTime: true, MTime: true, MTimeNotSystemTime: true},
+		p9.SetAttr{
+			ATimeSeconds:     uint64(atime.Unix()),
+			ATimeNanoSeconds: uint64(atime.Nanosecond()),
+			MTimeSeconds:     uint64(mtime.Unix()),
+			MTimeNanoSeconds: uint64(mtime.Nanosecond()),
+		},
+	)
+}
+
+// Symlink creates a symbolic link
+func (c *P9Client) Symlink(linkPath, target string) (p9.QID, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Get parent directory
+	dir := filepath.Dir(linkPath)
+	base := filepath.Base(linkPath)
+
+	// Walk to parent
+	names := parsePath(dir)
+	_, parent, err := c.root.Walk(names)
+	if err != nil {
+		return p9.QID{}, fmt.Errorf("walk to parent %s failed: %w", dir, err)
+	}
+	defer parent.Close()
+
+	// Create symlink
+	qid, err := parent.Symlink(base, target, p9.UID(0), p9.GID(0))
+	if err != nil {
+		return p9.QID{}, fmt.Errorf("symlink %s -> %s failed: %w", linkPath, target, err)
+	}
+
+	return qid, nil
+}
+
+// Link creates a hard link
+func (c *P9Client) Link(linkPath, targetPath string) (p9.QID, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Get parent directory of link
+	dir := filepath.Dir(linkPath)
+	base := filepath.Base(linkPath)
+
+	// Walk to link parent
+	names := parsePath(dir)
+	_, parent, err := c.root.Walk(names)
+	if err != nil {
+		return p9.QID{}, fmt.Errorf("walk to parent %s failed: %w", dir, err)
+	}
+	defer parent.Close()
+
+	// Walk to target file
+	targetNames := parsePath(targetPath)
+	_, target, err := c.root.Walk(targetNames)
+	if err != nil {
+		return p9.QID{}, fmt.Errorf("walk to target %s failed: %w", targetPath, err)
+	}
+	defer target.Close()
+
+	// Create hard link
+	if err := parent.Link(target, base); err != nil {
+		return p9.QID{}, fmt.Errorf("link %s -> %s failed: %w", linkPath, targetPath, err)
+	}
+
+	// Get QID of the linked file
+	qid, _, _, err := target.GetAttr(p9.AttrMask{})
+	if err != nil {
+		return p9.QID{}, fmt.Errorf("getattr after link failed: %w", err)
+	}
+
+	return qid, nil
+}
+
+// StatfsResult contains filesystem statistics
+type StatfsResult struct {
+	Blocks          uint64
+	BlocksFree      uint64
+	BlocksAvailable uint64
+	Files           uint64
+	FilesFree       uint64
+	BlockSize       uint64
+	NameLength      uint64
+}
+
+// Statfs gets filesystem statistics
+func (c *P9Client) Statfs(path string) (*StatfsResult, error) {
+	file, err := c.Walk(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	// Call statfs on the file
+	fsStat, err := file.StatFS()
+	if err != nil {
+		return nil, fmt.Errorf("statfs failed for %s: %w", path, err)
+	}
+
+	return &StatfsResult{
+		Blocks:          fsStat.Blocks,
+		BlocksFree:      fsStat.BlocksFree,
+		BlocksAvailable: fsStat.BlocksAvailable,
+		Files:           fsStat.Files,
+		FilesFree:       fsStat.FilesFree,
+		BlockSize:       uint64(fsStat.BlockSize),
+		NameLength:      uint64(fsStat.NameLength),
+	}, nil
+}
+
+// Fsync syncs file data to storage
+func (c *P9Client) Fsync(fid uint32) error {
+	file, ok := c.GetFile(fid)
+	if !ok {
+		return fmt.Errorf("invalid file handle: %d", fid)
+	}
+
+	// Call fsync on the file
+	if err := file.FSync(); err != nil {
+		return fmt.Errorf("fsync failed: %w", err)
+	}
+
+	return nil
 }
 
 // parsePath splits a path into components for 9p walk
