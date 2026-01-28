@@ -34,6 +34,7 @@ type VM struct {
 	NinePControlSock  string
 	NinePToken        string
 	NinePControlPort  int
+	NinePPort         int // Actual 9p listen port (auto-allocated)
 }
 
 // NewVM creates a new VM instance with detected configuration
@@ -100,10 +101,10 @@ func NewVM() (*VM, error) {
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(tokenData)), "\n")
-	if len(lines) < 2 {
+	if len(lines) < 3 {
 		ninepCmd.Process.Kill()
 		os.RemoveAll(stateDir)
-		return nil, fmt.Errorf("invalid 9p token file format")
+		return nil, fmt.Errorf("invalid 9p token file format (expected 3 lines, got %d)", len(lines))
 	}
 
 	ninepToken := lines[0]
@@ -113,9 +114,15 @@ func NewVM() (*VM, error) {
 		os.RemoveAll(stateDir)
 		return nil, fmt.Errorf("invalid 9p control port: %w", err)
 	}
+	ninepPort, err := strconv.Atoi(lines[2])
+	if err != nil {
+		ninepCmd.Process.Kill()
+		os.RemoveAll(stateDir)
+		return nil, fmt.Errorf("invalid 9p listen port: %w", err)
+	}
 	ninepControlSock := fmt.Sprintf("/tmp/9p-control-%d.sock", ninepCmd.Process.Pid)
 
-	slog.Info("9passthrough started", "pid", ninepCmd.Process.Pid, "control_port", controlPort)
+	slog.Info("9passthrough started", "pid", ninepCmd.Process.Pid, "control_port", controlPort, "9p_port", ninepPort)
 
 	// Allocate VM slot (now with 9p info)
 	slot, err := AllocateVMSlot(
@@ -173,6 +180,7 @@ func NewVM() (*VM, error) {
 		NinePControlSock: ninepControlSock,
 		NinePToken:       ninepToken,
 		NinePControlPort: controlPort,
+		NinePPort:        ninepPort,
 	}
 
 	slog.Info("VM instance initialized",
@@ -218,10 +226,14 @@ func (vm *VM) Start() error {
 		PasstSocket:      vm.PasstManager.SocketPath,
 		NinePToken:       vm.NinePToken,
 		NinePControlPort: vm.NinePControlPort,
+		NinePPort:        vm.NinePPort,
 	}
 
 	// Build QEMU command
 	args := BuildQEMUArgs(cfg)
+
+	// Debug: print full QEMU command
+	slog.Info("QEMU command", "cmd", fmt.Sprintf("qemu-system-x86_64 %s", strings.Join(args, " ")))
 
 	// Create QEMU command
 	vm.QEMUCmd = exec.Command("qemu-system-x86_64", args...)

@@ -51,5 +51,14 @@ RUN cd /tmp/9pvm-request && \
     go build -o /usr/local/bin/9pvm-request . && \
     rm -rf /tmp/9pvm-request
 
+# Build and install 9pfuse
+# COPY 9pfuse /tmp/9pfuse
+# RUN cd /tmp/9pfuse && \
+#     go build -o /usr/local/bin/9pfuse . && \
+#     rm -rf /tmp/9pfuse
+
+# Install FUSE kernel module and tools
+# RUN apk add --no-cache fuse3 fuse3-libs
+
 # Enable local service for 9p mount
 RUN rc-update add local default

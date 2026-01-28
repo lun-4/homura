@@ -14,7 +14,7 @@ import (
 	"github.com/hugelgupf/p9/p9"
 )
 
-const listenAddr = "0.0.0.0:5640"
+const listenAddr = "0.0.0.0:0" // Use port 0 to auto-allocate a free port
 
 var (
 	authToken    string
@@ -90,6 +90,9 @@ func main() {
 	}
 	defer listener.Close()
 
+	// Get the actual port that was allocated
+	actualPort := listener.Addr().(*net.TCPAddr).Port
+
 	// Start Unix socket control server
 	unixSocketPath := fmt.Sprintf("/tmp/9p-control-%d.sock", pid)
 	unixControlServer := NewUnixControlServer(unixSocketPath, registry, requestQueue, pid)
@@ -105,20 +108,20 @@ func main() {
 	}
 	defer tcpControlServer.Stop()
 
-	// Write token file for VM access
+	// Write token file for VM access (includes 9p port on third line)
 	tokenFilePath := fmt.Sprintf("/tmp/9p-token-%d", pid)
-	tokenContent := fmt.Sprintf("%s\n%d\n", authToken, controlPort)
+	tokenContent := fmt.Sprintf("%s\n%d\n%d\n", authToken, controlPort, actualPort)
 	if err := os.WriteFile(tokenFilePath, []byte(tokenContent), 0600); err != nil {
 		log.Fatalf("Failed to write token file: %v", err)
 	}
 	defer os.Remove(tokenFilePath)
 
 	log.Printf("9p server started with dynamic path management")
-	log.Printf("9p listening on: %s", listenAddr)
+	log.Printf("9p listening on: 0.0.0.0:%d", actualPort)
 	log.Printf("Unix control socket: %s", unixSocketPath)
 	log.Printf("TCP control port: %d (token-protected)", controlPort)
 	log.Printf("Token file: %s", tokenFilePath)
-	log.Printf("Mount inside VM with: mount -t 9p -o trans=tcp,port=5640 10.0.2.2 /mnt")
+	log.Printf("Mount inside VM with: mount -t 9p -o trans=tcp,port=%d 10.0.2.2 /mnt", actualPort)
 	log.Printf("Control with: 9pactl expose <path>")
 
 	// Setup signal handling for graceful shutdown

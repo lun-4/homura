@@ -336,6 +336,9 @@ func buildInitramfs(paths *ImagePaths) error {
 		fmt.Sprintf("modules/%s/kernel/fs/jbd2", kver),
 		fmt.Sprintf("modules/%s/kernel/fs/mbcache.ko", kver),
 		fmt.Sprintf("modules/%s/kernel/lib", kver),
+		// virtio drivers
+		fmt.Sprintf("modules/%s/kernel/drivers/virtio", kver),
+		fmt.Sprintf("modules/%s/kernel/drivers/block/virtio_blk.ko", kver),
 		fmt.Sprintf("modules/%s/kernel/drivers/net/virtio_net.ko", kver),
 		// 9p filesystem modules
 		fmt.Sprintf("modules/%s/kernel/net/9p", kver),
@@ -460,6 +463,17 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 		return fmt.Errorf("failed to copy 9pvm-request source: %w", err)
 	}
 
+	// Copy 9pfuse source for Docker build from cache directory
+	// ninepfuseSrc := filepath.Join(homeDir, ".cache", "homura", "src", "9pfuse")
+	// if _, err := os.Stat(ninepfuseSrc); os.IsNotExist(err) {
+	// 	return fmt.Errorf("9pfuse source not found at %s (run 'make 9p' to install)", ninepfuseSrc)
+	// }
+	// ninepfuseDst := filepath.Join(tmpDir, "9pfuse")
+	// if err := copyTree(ninepfuseSrc, ninepfuseDst); err != nil {
+	// 	return fmt.Errorf("failed to copy 9pfuse source: %w", err)
+	// }
+
+
 	// Detect docker or podman
 	dockerCmd := "docker"
 	if _, err := exec.LookPath("podman"); err == nil {
@@ -573,12 +587,16 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 	slog.Info("Creating ext4 image")
 	tmpRootfs := paths.RootfsPath + ".tmp"
 
-	cmd = exec.Command("truncate", "-s", "1G", tmpRootfs)
+	cmd = exec.Command("truncate", "-s", "1536M", tmpRootfs) // 1.5GB
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("truncate failed: %w", err)
 	}
 
 	cmd = exec.Command("mke2fs", "-q", "-t", "ext4", "-O", "^metadata_csum,^64bit", "-L", "rootfs", tmpRootfs)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		os.Remove(tmpRootfs)
 		return fmt.Errorf("mke2fs failed: %w", err)
@@ -595,6 +613,8 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 
 	// Mount
 	cmd = exec.Command("fuse2fs", "-o", "fakeroot,rw", tmpRootfs, mountDir)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		os.Remove(tmpRootfs)
 		return fmt.Errorf("fuse2fs mount failed: %w", err)
@@ -611,6 +631,8 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 
 	cmd = exec.Command("tar", "--same-owner", "-xf", "-", "-C", mountDir)
 	cmd.Stdin = tarFile2
+	cmd.Stdout = os.Stderr // Show tar output
+	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		os.Remove(tmpRootfs)
 		return fmt.Errorf("tar extract failed: %w", err)
@@ -633,9 +655,18 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 # Auto-mount 9p filesystem if kernel params present
 if grep -q "p9.token=" /proc/cmdline; then
     mkdir -p /mnt/host
-    mount -t 9p -o trans=tcp,port=5640 10.0.2.2 /mnt/host 2>/dev/null
+
+    # Extract 9p listen port from kernel cmdline
+    P9_PORT=$(grep -o 'p9.listenport=[0-9]*' /proc/cmdline | cut -d= -f2)
+    if [ -z "$P9_PORT" ]; then
+        echo "ERROR: p9.listenport not found in kernel cmdline"
+        exit 1
+    fi
+
+    # Use kernel v9fs
+    mount -t 9p -o trans=tcp,port=$P9_PORT 10.0.2.2 /mnt/host 2>/dev/null
     if [ $? -eq 0 ]; then
-        echo "9p filesystem mounted at /mnt/host"
+        echo "9p filesystem mounted at /mnt/host on port $P9_PORT"
     else
         echo "Failed to mount 9p filesystem"
     fi
@@ -678,25 +709,30 @@ func CreateEphemeralDisk(basePath, destPath string, size string) error {
 
 	// Sparse copy
 	cmd := exec.Command("cp", "--sparse=always", basePath, destPath)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("sparse copy failed: %w", err)
 	}
 
 	// Resize
 	cmd = exec.Command("truncate", "-s", size, destPath)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		os.Remove(destPath)
 		return fmt.Errorf("truncate failed: %w", err)
 	}
 
 	cmd = exec.Command("resize2fs", destPath)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		os.Remove(destPath)
 		return fmt.Errorf("resize2fs failed: %w", err)
 	}
 
+	slog.Info("Ephemeral disk created successfully")
 	return nil
 }
 
