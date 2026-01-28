@@ -37,3 +37,4 @@ go.work.sum
 .claude/
 9passthrough/9passthrough
 9pvm-request/9pvm-request
+guest/9pfuse/9pfuse
