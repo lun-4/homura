@@ -11,8 +11,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/lun-4/homura/internal/git"
 )
 
 // VM represents a running homura VM instance
@@ -70,14 +68,14 @@ func NewVM() (*VM, error) {
 	// Start 9passthrough server
 	slog.Info("Starting 9passthrough server", "workdir", workDir)
 
-	// Get repository root directory
-	rootDir, err := git.GetRepoRoot(workDir)
+	// Get 9passthrough binary from cache directory
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		os.RemoveAll(stateDir)
-		return nil, fmt.Errorf("failed to get repo root: %w", err)
+		return nil, fmt.Errorf("failed to get home directory: %w", err)
 	}
 
-	ninepBinary := filepath.Join(rootDir, "9passthrough", "9passthrough")
+	ninepBinary := filepath.Join(homeDir, ".cache", "homura", "bin", "9passthrough")
 	if _, err := os.Stat(ninepBinary); os.IsNotExist(err) {
 		os.RemoveAll(stateDir)
 		return nil, fmt.Errorf("9passthrough binary not found at %s (run 'make 9p' to build)", ninepBinary)
@@ -140,15 +138,6 @@ func NewVM() (*VM, error) {
 		ReleaseVMSlot(slot.SlotNumber)
 		os.RemoveAll(stateDir)
 		return nil, fmt.Errorf("failed to create passt manager: %w", err)
-	}
-
-	// Use user's SSH key instead of generating ephemeral one
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		ninepCmd.Process.Kill()
-		ReleaseVMSlot(slot.SlotNumber)
-		os.RemoveAll(stateDir)
-		return nil, fmt.Errorf("failed to get home directory: %w", err)
 	}
 
 	// Try common SSH key locations

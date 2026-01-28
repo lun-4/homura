@@ -13,8 +13,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"github.com/lun-4/homura/internal/git"
 )
 
 const (
@@ -448,12 +446,15 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 		return err
 	}
 
-	// Copy 9pvm-request source for Docker build
-	rootDir, err := git.GetRepoRoot(".")
+	// Copy 9pvm-request source for Docker build from cache directory
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return fmt.Errorf("failed to get repo root: %w", err)
+		return fmt.Errorf("failed to get home directory: %w", err)
 	}
-	ninepRequestSrc := filepath.Join(rootDir, "9pvm-request")
+	ninepRequestSrc := filepath.Join(homeDir, ".cache", "homura", "src", "9pvm-request")
+	if _, err := os.Stat(ninepRequestSrc); os.IsNotExist(err) {
+		return fmt.Errorf("9pvm-request source not found at %s (run 'make 9p' to install)", ninepRequestSrc)
+	}
 	ninepRequestDst := filepath.Join(tmpDir, "9pvm-request")
 	if err := copyTree(ninepRequestSrc, ninepRequestDst); err != nil {
 		return fmt.Errorf("failed to copy 9pvm-request source: %w", err)
