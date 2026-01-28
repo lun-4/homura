@@ -344,6 +344,8 @@ func buildInitramfs(paths *ImagePaths) error {
 		fmt.Sprintf("modules/%s/kernel/net/9p", kver),
 		fmt.Sprintf("modules/%s/kernel/fs/9p", kver),
 		fmt.Sprintf("modules/%s/kernel/fs/netfs", kver),
+		// FUSE for 9pfuse driver
+		fmt.Sprintf("modules/%s/kernel/fs/fuse", kver),
 	}
 
 	for _, modPath := range modulePaths {
@@ -464,14 +466,14 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 	}
 
 	// Copy 9pfuse source for Docker build from cache directory
-	// ninepfuseSrc := filepath.Join(homeDir, ".cache", "homura", "src", "9pfuse")
-	// if _, err := os.Stat(ninepfuseSrc); os.IsNotExist(err) {
-	// 	return fmt.Errorf("9pfuse source not found at %s (run 'make 9p' to install)", ninepfuseSrc)
-	// }
-	// ninepfuseDst := filepath.Join(tmpDir, "9pfuse")
-	// if err := copyTree(ninepfuseSrc, ninepfuseDst); err != nil {
-	// 	return fmt.Errorf("failed to copy 9pfuse source: %w", err)
-	// }
+	ninepfuseSrc := filepath.Join(homeDir, ".cache", "homura", "src", "9pfuse")
+	if _, err := os.Stat(ninepfuseSrc); os.IsNotExist(err) {
+		return fmt.Errorf("9pfuse source not found at %s (run 'make 9p' to install)", ninepfuseSrc)
+	}
+	ninepfuseDst := filepath.Join(tmpDir, "9pfuse")
+	if err := copyTree(ninepfuseSrc, ninepfuseDst); err != nil {
+		return fmt.Errorf("failed to copy 9pfuse source: %w", err)
+	}
 
 
 	// Detect docker or podman
@@ -650,9 +652,9 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 		slog.Warn("Failed to write hosts", "error", err)
 	}
 
-	// Create 9p auto-mount script
+	// Create 9p auto-mount script using FUSE
 	ninepScript := `#!/bin/sh
-# Auto-mount 9p filesystem if kernel params present
+# Auto-mount 9p filesystem via FUSE if kernel params present
 if grep -q "p9.token=" /proc/cmdline; then
     mkdir -p /mnt/host
 
@@ -663,12 +665,20 @@ if grep -q "p9.token=" /proc/cmdline; then
         exit 1
     fi
 
-    # Use kernel v9fs
-    mount -t 9p -o trans=tcp,port=$P9_PORT 10.0.2.2 /mnt/host 2>/dev/null
-    if [ $? -eq 0 ]; then
-        echo "9p filesystem mounted at /mnt/host on port $P9_PORT"
+    # Load FUSE module
+    modprobe fuse 2>/dev/null
+
+    # Start 9pfuse in background
+    /usr/local/bin/9pfuse -server 10.0.2.2:$P9_PORT -mount /mnt/host &
+
+    # Wait a moment for mount to complete
+    sleep 1
+
+    # Check if mounted
+    if mountpoint -q /mnt/host; then
+        echo "9p filesystem mounted at /mnt/host (FUSE) on port $P9_PORT"
     else
-        echo "Failed to mount 9p filesystem"
+        echo "Failed to mount 9p filesystem via FUSE"
     fi
 fi
 `
@@ -679,6 +689,61 @@ fi
 	ninepScriptPath := filepath.Join(localDDir, "9pmount.start")
 	if err := os.WriteFile(ninepScriptPath, []byte(ninepScript), 0755); err != nil {
 		return fmt.Errorf("failed to write 9p mount script: %w", err)
+	}
+
+	// Copy FUSE kernel module from modloop to rootfs
+	// Extract FUSE module to temp location
+	slog.Info("Copying FUSE kernel module to rootfs")
+	tmpModuleDir, err := os.MkdirTemp("", "homura-fuse-module-*")
+	if err == nil {
+		defer os.RemoveAll(tmpModuleDir)
+
+		// Extract fuse module from modloop
+		// Detect kernel version - extract from vmlinuz filename
+		// vmlinuz-virt -> we need the version from /lib/modules in initramfs
+		// For simplicity, we'll list the modloop and find the version
+		cmd := exec.Command("unsquashfs", "-ll", paths.ModloopPath)
+		output, err := cmd.Output()
+		var kver string
+		if err == nil {
+			// Parse output to find modules/VERSION/ directory
+			lines := strings.Split(string(output), "\n")
+			for _, line := range lines {
+				if strings.Contains(line, "modules/") && strings.Contains(line, "-virt/") {
+					parts := strings.Split(line, "modules/")
+					if len(parts) > 1 {
+						verParts := strings.Split(parts[1], "/")
+						if len(verParts) > 0 {
+							kver = verParts[0]
+							break
+						}
+					}
+				}
+			}
+		}
+
+		if kver != "" {
+			fusePath := fmt.Sprintf("modules/%s/kernel/fs/fuse", kver)
+			cmd := exec.Command("unsquashfs", "-f", "-d", tmpModuleDir, paths.ModloopPath, fusePath)
+			if cmd.Run() == nil {
+				// Copy extracted FUSE module to rootfs
+				srcFuse := filepath.Join(tmpModuleDir, fusePath)
+				dstFuse := filepath.Join(mountDir, "lib", "modules", kver, "kernel", "fs", "fuse")
+				if err := os.MkdirAll(dstFuse, 0755); err == nil {
+					copyTree(srcFuse, dstFuse)
+					slog.Info("FUSE module copied to rootfs", "version", kver)
+
+					// Run depmod to update module dependencies
+					slog.Info("Running depmod to update module dependencies")
+					depmodCmd := exec.Command("depmod", "-b", mountDir, kver)
+					depmodCmd.Stdout = os.Stderr
+					depmodCmd.Stderr = os.Stderr
+					if err := depmodCmd.Run(); err != nil {
+						slog.Warn("depmod failed", "error", err)
+					}
+				}
+			}
+		}
 	}
 
 	// Copy SSH host keys

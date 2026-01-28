@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"log"
 	"syscall"
 	"time"
@@ -59,7 +60,7 @@ func (n *NinePNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 	// Add to tree
 	return n.Inode.NewInode(ctx, child, fs.StableAttr{
 		Mode: modeToFileMode(attr.Mode),
-		Ino:  uint64(attr.UID), // Use UID as inode number (not perfect but works)
+		Ino:  pathToInode(childPath),
 	}), 0
 }
 
@@ -172,6 +173,19 @@ func (fh *NinePFileHandle) Release(ctx context.Context) syscall.Errno {
 }
 
 // Helper functions
+
+func pathToInode(path string) uint64 {
+	// Hash the path to create a unique inode number
+	h := fnv.New64a()
+	h.Write([]byte(path))
+	ino := h.Sum64()
+
+	// Ensure we never return 0 or 1 (reserved inodes)
+	if ino == 0 || ino == 1 {
+		return 2
+	}
+	return ino
+}
 
 func modeToFileMode(mode p9.FileMode) uint32 {
 	// Convert p9 mode to Unix mode
