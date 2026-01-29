@@ -103,16 +103,22 @@ func NewVM() (*VM, error) {
 		return nil, fmt.Errorf("failed to start 9passthrough: %w", err)
 	}
 
-	// Wait for token file
-	time.Sleep(500 * time.Millisecond)
-
-	// Read token file
+	// Wait for token file with polling
 	tokenFile := fmt.Sprintf("/tmp/9p-token-%d", ninepCmd.Process.Pid)
-	tokenData, err := os.ReadFile(tokenFile)
-	if err != nil {
+	var tokenData []byte
+	deadline := time.Now().Add(1 * time.Second)
+	for time.Now().Before(deadline) {
+		var readErr error
+		tokenData, readErr = os.ReadFile(tokenFile)
+		if readErr == nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if tokenData == nil {
 		ninepCmd.Process.Kill()
 		os.RemoveAll(stateDir)
-		return nil, fmt.Errorf("failed to read 9p token file: %w", err)
+		return nil, fmt.Errorf("failed to read 9p token file: timed out after 1s")
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(tokenData)), "\n")
