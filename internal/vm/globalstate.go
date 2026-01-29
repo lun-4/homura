@@ -31,6 +31,9 @@ type VMSlot struct {
 	NinePPID           int
 	NinePControlSocket string
 	NinePControlPort   int
+
+	// Metadata
+	CreatedAt int64 // Unix milliseconds
 }
 
 // initGlobalStateDB initializes the global state database with proper schema
@@ -296,6 +299,97 @@ func FindVMByWorkDir(workDir string) (*VMSlot, error) {
 
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("no VM found for working directory: %s", workDir)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to find VM: %w", err)
+	}
+
+	return &slot, nil
+}
+
+// FindVMsByWorkDir finds all running VMs for a working directory
+func FindVMsByWorkDir(workDir string) ([]*VMSlot, error) {
+	if err := initGlobalStateDB(); err != nil {
+		return nil, err
+	}
+
+	// Clean up stale slots first
+	if err := CleanupStaleSlots(); err != nil {
+		return nil, fmt.Errorf("failed to cleanup stale slots: %w", err)
+	}
+
+	db, err := sql.Open("sqlite3", GlobalStateDBPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open global state DB: %w", err)
+	}
+	defer db.Close()
+
+	rows, err := db.Query(`
+		SELECT slot_number, ip_address, port_start, port_end, vm_pid,
+		       passt_socket_path, working_dir, ninep_pid, ninep_control_socket,
+		       ninep_control_port, created_at
+		FROM vm_slots
+		WHERE working_dir = ?
+		ORDER BY slot_number
+	`, workDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query VMs: %w", err)
+	}
+	defer rows.Close()
+
+	var slots []*VMSlot
+	for rows.Next() {
+		var slot VMSlot
+		if err := rows.Scan(
+			&slot.SlotNumber, &slot.IPAddress, &slot.PortStart, &slot.PortEnd,
+			&slot.VMPID, &slot.PasstSocketPath, &slot.WorkingDir,
+			&slot.NinePPID, &slot.NinePControlSocket, &slot.NinePControlPort,
+			&slot.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan row: %w", err)
+		}
+		slots = append(slots, &slot)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("row iteration error: %w", err)
+	}
+
+	return slots, nil
+}
+
+// FindVMBySlot finds a running VM by its slot number
+func FindVMBySlot(slotNumber int) (*VMSlot, error) {
+	if err := initGlobalStateDB(); err != nil {
+		return nil, err
+	}
+
+	// Clean up stale slots first
+	if err := CleanupStaleSlots(); err != nil {
+		return nil, fmt.Errorf("failed to cleanup stale slots: %w", err)
+	}
+
+	db, err := sql.Open("sqlite3", GlobalStateDBPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open global state DB: %w", err)
+	}
+	defer db.Close()
+
+	var slot VMSlot
+	err = db.QueryRow(`
+		SELECT slot_number, ip_address, port_start, port_end, vm_pid,
+		       passt_socket_path, working_dir, ninep_pid, ninep_control_socket,
+		       ninep_control_port
+		FROM vm_slots
+		WHERE slot_number = ?
+	`, slotNumber).Scan(
+		&slot.SlotNumber, &slot.IPAddress, &slot.PortStart, &slot.PortEnd,
+		&slot.VMPID, &slot.PasstSocketPath, &slot.WorkingDir,
+		&slot.NinePPID, &slot.NinePControlSocket, &slot.NinePControlPort,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("no VM found with slot number: %d", slotNumber)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to find VM: %w", err)

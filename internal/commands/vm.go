@@ -1,18 +1,54 @@
 package commands
 
 import (
+	"bufio"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/lun-4/homura/internal/config"
 	"github.com/lun-4/homura/internal/git"
 	"github.com/lun-4/homura/internal/vm"
 	"github.com/spf13/cobra"
 )
+
+// formatRelativeTime formats a Unix millisecond timestamp as relative time
+func formatRelativeTime(createdAtMs int64) string {
+	created := time.UnixMilli(createdAtMs)
+	dur := time.Since(created)
+
+	if dur < time.Minute {
+		secs := int(dur.Seconds())
+		if secs == 1 {
+			return "1 second ago"
+		}
+		return fmt.Sprintf("%d seconds ago", secs)
+	} else if dur < time.Hour {
+		mins := int(dur.Minutes())
+		if mins == 1 {
+			return "1 minute ago"
+		}
+		return fmt.Sprintf("%d minutes ago", mins)
+	} else if dur < 24*time.Hour {
+		hours := int(dur.Hours())
+		if hours == 1 {
+			return "1 hour ago"
+		}
+		return fmt.Sprintf("%d hours ago", hours)
+	} else {
+		days := int(dur.Hours() / 24)
+		if days == 1 {
+			return "1 day ago"
+		}
+		return fmt.Sprintf("%d days ago", days)
+	}
+}
 
 // RunVM implements the `homura vm` command
 func RunVM(cmd *cobra.Command, args []string, branchName string) error {
@@ -192,10 +228,41 @@ func VMSsh(cmd *cobra.Command, args []string, branchName string) error {
 		}
 	}
 
-	// Find the running VM for this working directory
-	slot, err := vm.FindVMByWorkDir(workDir)
+	// Find all running VMs for this working directory
+	slots, err := vm.FindVMsByWorkDir(workDir)
 	if err != nil {
-		return fmt.Errorf("failed to find VM: %w", err)
+		return fmt.Errorf("failed to find VMs: %w", err)
+	}
+
+	if len(slots) == 0 {
+		return fmt.Errorf("no VM found for working directory: %s", workDir)
+	}
+
+	var slot *vm.VMSlot
+	if len(slots) == 1 {
+		// Only one VM, use it directly
+		slot = slots[0]
+	} else {
+		// Multiple VMs - show selection list
+		fmt.Printf("Multiple VMs found for %s:\n\n", workDir)
+		for i, s := range slots {
+			fmt.Printf("  %d) slot %d - %s:%d (created %s)\n", i+1, s.SlotNumber, s.IPAddress, s.PortStart, formatRelativeTime(s.CreatedAt))
+		}
+		fmt.Printf("\nSelect VM [1-%d]: ", len(slots))
+
+		reader := bufio.NewReader(os.Stdin)
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read input: %w", err)
+		}
+
+		input = strings.TrimSpace(input)
+		choice, err := strconv.Atoi(input)
+		if err != nil || choice < 1 || choice > len(slots) {
+			return fmt.Errorf("invalid selection: %s", input)
+		}
+
+		slot = slots[choice-1]
 	}
 
 	slog.Info("Connecting to VM", "ip", slot.IPAddress, "ssh_port", slot.PortStart, "working_dir", workDir)

@@ -7,6 +7,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/lun-4/homura/internal/vm"
 	"github.com/spf13/cobra"
@@ -131,13 +133,40 @@ func getTargetVM() (*vm.VMSlot, error) {
 		return nil, fmt.Errorf("failed to resolve directory: %w", err)
 	}
 
-	// Look up in database
-	slot, err := vm.FindVMByWorkDir(absDir)
+	// Look up all VMs for this directory
+	slots, err := vm.FindVMsByWorkDir(absDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find VM for %s: %w", absDir, err)
+		return nil, fmt.Errorf("failed to find VMs: %w", err)
 	}
 
-	return slot, nil
+	if len(slots) == 0 {
+		return nil, fmt.Errorf("no VM found for %s", absDir)
+	}
+
+	if len(slots) == 1 {
+		return slots[0], nil
+	}
+
+	// Multiple VMs - show selection list
+	fmt.Printf("Multiple VMs found for %s:\n\n", absDir)
+	for i, s := range slots {
+		fmt.Printf("  %d) slot %d - %s:%d (created %s)\n", i+1, s.SlotNumber, s.IPAddress, s.PortStart, formatRelativeTime(s.CreatedAt))
+	}
+	fmt.Printf("\nSelect VM [1-%d]: ", len(slots))
+
+	reader := bufio.NewReader(os.Stdin)
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, fmt.Errorf("failed to read input: %w", err)
+	}
+
+	input = strings.TrimSpace(input)
+	choice, err := strconv.Atoi(input)
+	if err != nil || choice < 1 || choice > len(slots) {
+		return nil, fmt.Errorf("invalid selection: %s", input)
+	}
+
+	return slots[choice-1], nil
 }
 
 // sendNinePCommand sends a JSON-RPC command to the 9passthrough control socket
