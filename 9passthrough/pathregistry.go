@@ -27,11 +27,18 @@ type PathNode struct {
 	hasExposedDescendants bool // Any descendant is exposed
 }
 
+// PathInfo represents exposed path information
+type PathInfo struct {
+	Path     string
+	ReadOnly bool
+}
+
 // PathRegistry maintains a thread-safe registry of exposed paths
 type PathRegistry struct {
-	mu      sync.RWMutex
-	root    *PathNode
-	exposed map[string]bool // Quick existence check
+	mu       sync.RWMutex
+	root     *PathNode
+	exposed  map[string]bool // Quick existence check
+	readOnly map[string]bool // Track read-only paths
 }
 
 // NewPathRegistry creates a new PathRegistry
@@ -40,12 +47,13 @@ func NewPathRegistry() *PathRegistry {
 		root: &PathNode{
 			children: make(map[string]*PathNode),
 		},
-		exposed: make(map[string]bool),
+		exposed:  make(map[string]bool),
+		readOnly: make(map[string]bool),
 	}
 }
 
 // AddPath adds a path to the registry after validating it exists
-func (pr *PathRegistry) AddPath(p string) error {
+func (pr *PathRegistry) AddPath(p string, readOnly bool) error {
 	// Clean and validate path
 	p = path.Clean(p)
 	if !path.IsAbs(p) {
@@ -60,13 +68,15 @@ func (pr *PathRegistry) AddPath(p string) error {
 	pr.mu.Lock()
 	defer pr.mu.Unlock()
 
-	// Already exposed
+	// Already exposed - update read-only flag if needed
 	if pr.exposed[p] {
+		pr.readOnly[p] = readOnly
 		return nil
 	}
 
 	// Add to quick lookup map
 	pr.exposed[p] = true
+	pr.readOnly[p] = readOnly
 
 	// Split path into components
 	components := splitPath(p)
@@ -110,8 +120,9 @@ func (pr *PathRegistry) RemovePath(p string) {
 		return
 	}
 
-	// Remove from quick lookup map
+	// Remove from quick lookup maps
 	delete(pr.exposed, p)
+	delete(pr.readOnly, p)
 
 	// Split path into components
 	components := splitPath(p)
@@ -253,17 +264,49 @@ func (pr *PathRegistry) CheckPath(p string) PathVisibility {
 	return NotVisible
 }
 
-// ListPaths returns all exposed paths
-func (pr *PathRegistry) ListPaths() []string {
+// ListPaths returns all exposed paths with their read-only status
+func (pr *PathRegistry) ListPaths() []PathInfo {
 	pr.mu.RLock()
 	defer pr.mu.RUnlock()
 
-	paths := make([]string, 0, len(pr.exposed))
+	paths := make([]PathInfo, 0, len(pr.exposed))
 	for p := range pr.exposed {
-		paths = append(paths, p)
+		paths = append(paths, PathInfo{
+			Path:     p,
+			ReadOnly: pr.readOnly[p],
+		})
 	}
 
 	return paths
+}
+
+// IsReadOnly checks if a path or any of its ancestors is read-only
+func (pr *PathRegistry) IsReadOnly(p string) bool {
+	p = path.Clean(p)
+
+	pr.mu.RLock()
+	defer pr.mu.RUnlock()
+
+	// Check exact match first
+	if pr.exposed[p] {
+		return pr.readOnly[p]
+	}
+
+	// Check if any ancestor is exposed and read-only
+	components := splitPath(p)
+	for i := len(components); i > 0; i-- {
+		ancestorPath := "/" + strings.Join(components[:i], "/")
+		if pr.exposed[ancestorPath] {
+			return pr.readOnly[ancestorPath]
+		}
+	}
+
+	// Check root
+	if pr.exposed["/"] {
+		return pr.readOnly["/"]
+	}
+
+	return false
 }
 
 // GetExposedChildren returns the names of exposed child paths for a given parent path

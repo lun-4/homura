@@ -35,7 +35,8 @@ type RPCError struct {
 
 // ExposeParams represents parameters for the expose method
 type ExposeParams struct {
-	Path string `json:"path"`
+	Path     string `json:"path"`
+	ReadOnly bool   `json:"readonly,omitempty"`
 }
 
 // UnexposeParams represents parameters for the unexpose method
@@ -45,8 +46,9 @@ type UnexposeParams struct {
 
 // RequestParams represents parameters for the request method
 type RequestParams struct {
-	Path  string `json:"path"`
-	Token string `json:"token"`
+	Path     string `json:"path"`
+	Token    string `json:"token"`
+	ReadOnly bool   `json:"readonly,omitempty"`
 }
 
 // ReqApproveParams represents parameters for req-approve
@@ -60,12 +62,18 @@ type ReqDenyParams struct {
 	Reason    string `json:"reason,omitempty"`
 }
 
+// StatusPathInfo represents path info in status response
+type StatusPathInfo struct {
+	Path     string `json:"path"`
+	ReadOnly bool   `json:"readonly"`
+}
+
 // StatusResult represents the result of the status method
 type StatusResult struct {
-	ExposedCount int      `json:"exposed_count"`
-	ExposedPaths []string `json:"exposed_paths"`
-	Uptime       string   `json:"uptime"`
-	Connections  int      `json:"connections"`
+	ExposedCount int              `json:"exposed_count"`
+	ExposedPaths []StatusPathInfo `json:"exposed_paths"`
+	Uptime       string           `json:"uptime"`
+	Connections  int              `json:"connections"`
 }
 
 // ControlServer manages the control socket server
@@ -295,7 +303,7 @@ func (cs *ControlServer) handleExpose(req RPCRequest) RPCResponse {
 	}
 
 	// Add path to registry
-	if err := cs.registry.AddPath(params.Path); err != nil {
+	if err := cs.registry.AddPath(params.Path, params.ReadOnly); err != nil {
 		return RPCResponse{
 			Error: &RPCError{
 				Code:    -32000,
@@ -305,11 +313,17 @@ func (cs *ControlServer) handleExpose(req RPCRequest) RPCResponse {
 		}
 	}
 
+	mode := "rw"
+	if params.ReadOnly {
+		mode = "ro"
+	}
+
 	return RPCResponse{
 		Result: map[string]interface{}{
-			"success": true,
-			"path":    params.Path,
-			"message": fmt.Sprintf("Successfully exposed: %s", params.Path),
+			"success":  true,
+			"path":     params.Path,
+			"readonly": params.ReadOnly,
+			"message":  fmt.Sprintf("Successfully exposed: %s (%s)", params.Path, mode),
 		},
 		ID: req.ID,
 	}
@@ -351,9 +365,24 @@ func (cs *ControlServer) handleUnexpose(req RPCRequest) RPCResponse {
 	}
 }
 
+// PathInfoResult represents path info in RPC response
+type PathInfoResult struct {
+	Path     string `json:"path"`
+	ReadOnly bool   `json:"readonly"`
+}
+
 // handleList handles the list method
 func (cs *ControlServer) handleList(req RPCRequest) RPCResponse {
-	paths := cs.registry.ListPaths()
+	pathInfos := cs.registry.ListPaths()
+
+	// Convert to result format
+	paths := make([]PathInfoResult, len(pathInfos))
+	for i, info := range pathInfos {
+		paths[i] = PathInfoResult{
+			Path:     info.Path,
+			ReadOnly: info.ReadOnly,
+		}
+	}
 
 	return RPCResponse{
 		Result: map[string]interface{}{
@@ -370,8 +399,17 @@ func (cs *ControlServer) handleStatus(req RPCRequest) RPCResponse {
 	connections := cs.connections
 	cs.mu.Unlock()
 
-	paths := cs.registry.ListPaths()
+	pathInfos := cs.registry.ListPaths()
 	uptime := time.Since(cs.startTime)
+
+	// Convert to status format
+	paths := make([]StatusPathInfo, len(pathInfos))
+	for i, info := range pathInfos {
+		paths[i] = StatusPathInfo{
+			Path:     info.Path,
+			ReadOnly: info.ReadOnly,
+		}
+	}
 
 	return RPCResponse{
 		Result: StatusResult{
@@ -420,8 +458,8 @@ func (cs *ControlServer) handleRequestMethod(req RPCRequest) RPCResponse {
 	result := pathReq.Wait(ctx)
 
 	if result.Approved {
-		// Expose the path
-		if err := cs.registry.AddPath(params.Path); err != nil {
+		// Expose the path with the requested read-only mode
+		if err := cs.registry.AddPath(params.Path, params.ReadOnly); err != nil {
 			return RPCResponse{
 				Error: &RPCError{
 					Code:    -32000,
@@ -435,6 +473,7 @@ func (cs *ControlServer) handleRequestMethod(req RPCRequest) RPCResponse {
 			Result: map[string]interface{}{
 				"approved": true,
 				"path":     params.Path,
+				"readonly": params.ReadOnly,
 			},
 			ID: req.ID,
 		}

@@ -15,6 +15,9 @@ import (
 // NinePTargetDir is set by main.go to the -d flag value
 var NinePTargetDir *string
 
+// NinePTargetPID is set by main.go to the -p flag value
+var NinePTargetPID *int
+
 // RPCRequest represents a JSON-RPC request
 type RPCRequest struct {
 	Method string      `json:"method"`
@@ -37,7 +40,8 @@ type RPCError struct {
 
 // ExposeParams represents parameters for the expose method
 type ExposeParams struct {
-	Path string `json:"path"`
+	Path     string `json:"path"`
+	ReadOnly bool   `json:"readonly,omitempty"`
 }
 
 // UnexposeParams represents parameters for the unexpose method
@@ -45,18 +49,24 @@ type UnexposeParams struct {
 	Path string `json:"path"`
 }
 
+// PathInfo represents path info in list result
+type PathInfo struct {
+	Path     string `json:"path"`
+	ReadOnly bool   `json:"readonly"`
+}
+
 // ListResult represents the result of the list method
 type ListResult struct {
-	Paths []string `json:"paths"`
-	Count int      `json:"count"`
+	Paths []PathInfo `json:"paths"`
+	Count int        `json:"count"`
 }
 
 // StatusResult represents the result of the status method
 type StatusResult struct {
-	ExposedCount int      `json:"exposed_count"`
-	ExposedPaths []string `json:"exposed_paths"`
-	Uptime       string   `json:"uptime"`
-	Connections  int      `json:"connections"`
+	ExposedCount int        `json:"exposed_count"`
+	ExposedPaths []PathInfo `json:"exposed_paths"`
+	Uptime       string     `json:"uptime"`
+	Connections  int        `json:"connections"`
 }
 
 // RequestInfo represents information about a path request
@@ -90,8 +100,18 @@ type MessageResult struct {
 	Message string `json:"message"`
 }
 
-// getTargetVM finds the VM to control based on -d flag or current directory
+// getTargetVM finds the VM to control based on -p flag, -d flag, or current directory
 func getTargetVM() (*vm.VMSlot, error) {
+	// Check for PID-based lookup first
+	if NinePTargetPID != nil && *NinePTargetPID != 0 {
+		slot, err := vm.FindVMByNinePPID(*NinePTargetPID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to find VM for 9passthrough PID %d: %w", *NinePTargetPID, err)
+		}
+		return slot, nil
+	}
+
+	// Fall back to directory-based lookup
 	targetDir := ""
 
 	if NinePTargetDir != nil && *NinePTargetDir != "" {
@@ -174,13 +194,19 @@ func NinePExpose(cmd *cobra.Command, args []string) error {
 
 	pathToExpose := args[0]
 
+	// Check for read-only flag
+	readOnly := false
+	if len(args) > 1 && args[1] == "ro" {
+		readOnly = true
+	}
+
 	// Convert to absolute path
 	absPath, err := filepath.Abs(pathToExpose)
 	if err != nil {
 		return fmt.Errorf("failed to get absolute path: %w", err)
 	}
 
-	params := ExposeParams{Path: absPath}
+	params := ExposeParams{Path: absPath, ReadOnly: readOnly}
 	response, err := sendNinePCommand(slot.NinePControlSocket, "expose", params)
 	if err != nil {
 		return fmt.Errorf("failed to expose path: %w", err)
@@ -198,7 +224,11 @@ func NinePExpose(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Printf("Successfully exposed: %s\n", absPath)
+	mode := "rw"
+	if readOnly {
+		mode = "ro"
+	}
+	fmt.Printf("Successfully exposed: %s (%s)\n", absPath, mode)
 	return nil
 }
 
@@ -272,8 +302,12 @@ func NinePList(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("Exposed paths (%d):\n", result.Count)
-	for _, path := range result.Paths {
-		fmt.Printf("  %s\n", path)
+	for _, pathInfo := range result.Paths {
+		mode := "rw"
+		if pathInfo.ReadOnly {
+			mode = "ro"
+		}
+		fmt.Printf("  %s (%s)\n", pathInfo.Path, mode)
 	}
 
 	return nil
@@ -313,8 +347,12 @@ func NinePStatus(cmd *cobra.Command, args []string) error {
 
 	if len(result.ExposedPaths) > 0 {
 		fmt.Println("\nExposed paths:")
-		for _, path := range result.ExposedPaths {
-			fmt.Printf("  %s\n", path)
+		for _, pathInfo := range result.ExposedPaths {
+			mode := "rw"
+			if pathInfo.ReadOnly {
+				mode = "ro"
+			}
+			fmt.Printf("  %s (%s)\n", pathInfo.Path, mode)
 		}
 	}
 

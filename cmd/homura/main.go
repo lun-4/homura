@@ -12,6 +12,7 @@ import (
 var (
 	forceFlag      bool
 	ninepTargetDir string // Global flag for all 9p commands
+	ninepTargetPID int    // Target 9passthrough by PID
 )
 
 var rootCmd = &cobra.Command{
@@ -97,9 +98,9 @@ var ninepCmd = &cobra.Command{
 }
 
 var ninepExposeCmd = &cobra.Command{
-	Use:   "expose <path>",
-	Short: "Expose a host path to the VM",
-	Args:  cobra.ExactArgs(1),
+	Use:   "expose <path> [ro]",
+	Short: "Expose a host path to the VM (add 'ro' for read-only)",
+	Args:  cobra.RangeArgs(1, 2),
 	RunE:  commands.NinePExpose,
 }
 
@@ -163,12 +164,15 @@ func init() {
 	// Add vm subcommands
 	vmCmd.AddCommand(vmSshCmd)
 
-	// Add -d flag to all 9p commands
+	// Add -d and -p flags to all 9p commands
 	ninepCmd.PersistentFlags().StringVarP(&ninepTargetDir, "dir", "d", "",
 		"Target VM by working directory (defaults to current directory)")
+	ninepCmd.PersistentFlags().IntVarP(&ninepTargetPID, "pid", "p", 0,
+		"Target VM by 9passthrough PID")
 
-	// Make flag available to commands package
+	// Make flags available to commands package
 	commands.NinePTargetDir = &ninepTargetDir
+	commands.NinePTargetPID = &ninepTargetPID
 
 	ninepCmd.AddCommand(ninepExposeCmd)
 	ninepCmd.AddCommand(ninepUnexposeCmd)

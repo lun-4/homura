@@ -68,12 +68,12 @@ func main() {
 	registry := NewPathRegistry()
 	requestQueue = NewRequestQueue()
 
-	// Add initial paths if provided
+	// Add initial paths if provided (default to read-write)
 	for _, path := range initialPaths {
-		if err := registry.AddPath(path); err != nil {
+		if err := registry.AddPath(path, false); err != nil {
 			log.Printf("Warning: Failed to add initial path %s: %v", path, err)
 		} else {
-			log.Printf("Initially exposed: %s", path)
+			log.Printf("Initially exposed: %s (rw)", path)
 		}
 	}
 

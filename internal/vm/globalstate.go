@@ -303,3 +303,43 @@ func FindVMByWorkDir(workDir string) (*VMSlot, error) {
 
 	return &slot, nil
 }
+
+// FindVMByNinePPID finds a running VM by its 9passthrough PID
+func FindVMByNinePPID(ninepPID int) (*VMSlot, error) {
+	if err := initGlobalStateDB(); err != nil {
+		return nil, err
+	}
+
+	// Clean up stale slots first
+	if err := CleanupStaleSlots(); err != nil {
+		return nil, fmt.Errorf("failed to cleanup stale slots: %w", err)
+	}
+
+	db, err := sql.Open("sqlite3", GlobalStateDBPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open global state DB: %w", err)
+	}
+	defer db.Close()
+
+	var slot VMSlot
+	err = db.QueryRow(`
+		SELECT slot_number, ip_address, port_start, port_end, vm_pid,
+		       passt_socket_path, working_dir, ninep_pid, ninep_control_socket,
+		       ninep_control_port
+		FROM vm_slots
+		WHERE ninep_pid = ?
+	`, ninepPID).Scan(
+		&slot.SlotNumber, &slot.IPAddress, &slot.PortStart, &slot.PortEnd,
+		&slot.VMPID, &slot.PasstSocketPath, &slot.WorkingDir,
+		&slot.NinePPID, &slot.NinePControlSocket, &slot.NinePControlPort,
+	)
+
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("no VM found for 9passthrough PID: %d", ninepPID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to find VM: %w", err)
+	}
+
+	return &slot, nil
+}

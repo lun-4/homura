@@ -30,9 +30,10 @@ func (vr *VirtualRoot) Attach() (p9.File, error) {
 
 // VirtualFile implements p9.File with path filtering
 type VirtualFile struct {
-	path     string
-	registry *PathRegistry
-	realFile *os.File // For opened files
+	path         string
+	registry     *PathRegistry
+	realFile     *os.File // For opened files
+	openedReadOnly bool     // Track if file was opened read-only
 }
 
 // Walk implements p9.File.Walk
@@ -178,6 +179,11 @@ func (vf *VirtualFile) SetAttr(valid p9.SetAttrMask, attr p9.SetAttr) error {
 		return syscall.EPERM
 	}
 
+	// Check if path is read-only
+	if vf.registry.IsReadOnly(vf.path) {
+		return syscall.EROFS
+	}
+
 	if valid.Size {
 		if err := os.Truncate(vf.path, int64(attr.Size)); err != nil {
 			return err
@@ -250,6 +256,12 @@ func (vf *VirtualFile) Open(mode p9.OpenFlags) (p9.QID, uint32, error) {
 			return p9.QID{}, 0, err
 		}
 
+		// Check if path is read-only and write mode is requested
+		isReadOnly := vf.registry.IsReadOnly(vf.path)
+		if isReadOnly && mode != p9.ReadOnly {
+			return p9.QID{}, 0, syscall.EROFS
+		}
+
 		if info.IsDir() {
 			// For directories, we don't need to actually open them
 			// Just return the QID (Readdir will work without realFile set)
@@ -267,6 +279,7 @@ func (vf *VirtualFile) Open(mode p9.OpenFlags) (p9.QID, uint32, error) {
 		}
 
 		vf.realFile = f
+		vf.openedReadOnly = isReadOnly
 
 		qid := fileInfoToQID(vf.path, info)
 		iounit := uint32(65536) // 64KB I/O unit
@@ -296,6 +309,11 @@ func (vf *VirtualFile) Create(name string, flags p9.OpenFlags, permissions p9.Fi
 	visibility := vf.registry.CheckPath(vf.path)
 	if visibility != Exposed {
 		return nil, p9.QID{}, 0, syscall.EPERM
+	}
+
+	// Check if path is read-only
+	if vf.registry.IsReadOnly(vf.path) {
+		return nil, p9.QID{}, 0, syscall.EROFS
 	}
 
 	newPath := path.Join(vf.path, name)
@@ -354,6 +372,11 @@ func (vf *VirtualFile) Mkdir(name string, permissions p9.FileMode, uid p9.UID, g
 		return p9.QID{}, syscall.EPERM
 	}
 
+	// Check if path is read-only
+	if vf.registry.IsReadOnly(vf.path) {
+		return p9.QID{}, syscall.EROFS
+	}
+
 	newPath := path.Join(vf.path, name)
 
 	if err := os.Mkdir(newPath, os.FileMode(permissions)); err != nil {
@@ -389,6 +412,11 @@ func (vf *VirtualFile) Mkdir(name string, permissions p9.FileMode, uid p9.UID, g
 func (vf *VirtualFile) Symlink(oldname string, newname string, uid p9.UID, gid p9.GID) (p9.QID, error) {
 	if vf.registry.CheckPath(vf.path) != Exposed {
 		return p9.QID{}, syscall.EPERM
+	}
+
+	// Check if path is read-only
+	if vf.registry.IsReadOnly(vf.path) {
+		return p9.QID{}, syscall.EROFS
 	}
 
 	newPath := path.Join(vf.path, newname)
@@ -428,6 +456,11 @@ func (vf *VirtualFile) Link(target p9.File, newname string) error {
 		return syscall.EPERM
 	}
 
+	// Check if path is read-only
+	if vf.registry.IsReadOnly(vf.path) {
+		return syscall.EROFS
+	}
+
 	targetVF, ok := target.(*VirtualFile)
 	if !ok {
 		return syscall.EINVAL
@@ -445,6 +478,11 @@ func (vf *VirtualFile) Link(target p9.File, newname string) error {
 func (vf *VirtualFile) Mknod(name string, mode p9.FileMode, major uint32, minor uint32, uid p9.UID, gid p9.GID) (p9.QID, error) {
 	if vf.registry.CheckPath(vf.path) != Exposed {
 		return p9.QID{}, syscall.EPERM
+	}
+
+	// Check if path is read-only
+	if vf.registry.IsReadOnly(vf.path) {
+		return p9.QID{}, syscall.EROFS
 	}
 
 	newPath := path.Join(vf.path, name)
@@ -485,6 +523,11 @@ func (vf *VirtualFile) Rename(directory p9.File, newname string) error {
 		return syscall.EPERM
 	}
 
+	// Check if source path is read-only
+	if vf.registry.IsReadOnly(vf.path) {
+		return syscall.EROFS
+	}
+
 	dirVF, ok := directory.(*VirtualFile)
 	if !ok {
 		return syscall.EINVAL
@@ -492,6 +535,11 @@ func (vf *VirtualFile) Rename(directory p9.File, newname string) error {
 
 	if vf.registry.CheckPath(dirVF.path) != Exposed {
 		return syscall.EPERM
+	}
+
+	// Check if destination path is read-only
+	if vf.registry.IsReadOnly(dirVF.path) {
+		return syscall.EROFS
 	}
 
 	newPath := path.Join(dirVF.path, newname)
@@ -504,6 +552,11 @@ func (vf *VirtualFile) RenameAt(oldname string, newdir p9.File, newname string) 
 		return syscall.EPERM
 	}
 
+	// Check if source path is read-only
+	if vf.registry.IsReadOnly(vf.path) {
+		return syscall.EROFS
+	}
+
 	newdirVF, ok := newdir.(*VirtualFile)
 	if !ok {
 		return syscall.EINVAL
@@ -511,6 +564,11 @@ func (vf *VirtualFile) RenameAt(oldname string, newdir p9.File, newname string) 
 
 	if vf.registry.CheckPath(newdirVF.path) != Exposed {
 		return syscall.EPERM
+	}
+
+	// Check if destination path is read-only
+	if vf.registry.IsReadOnly(newdirVF.path) {
+		return syscall.EROFS
 	}
 
 	oldPath := path.Join(vf.path, oldname)
@@ -523,6 +581,11 @@ func (vf *VirtualFile) RenameAt(oldname string, newdir p9.File, newname string) 
 func (vf *VirtualFile) UnlinkAt(name string, flags uint32) error {
 	if vf.registry.CheckPath(vf.path) != Exposed {
 		return syscall.EPERM
+	}
+
+	// Check if path is read-only
+	if vf.registry.IsReadOnly(vf.path) {
+		return syscall.EROFS
 	}
 
 	targetPath := path.Join(vf.path, name)
@@ -649,6 +712,11 @@ func (vf *VirtualFile) WriteAt(p []byte, offset int64) (int, error) {
 		return 0, syscall.EBADF
 	}
 
+	// Check if file was opened read-only
+	if vf.openedReadOnly {
+		return 0, syscall.EROFS
+	}
+
 	return vf.realFile.WriteAt(p, offset)
 }
 
@@ -700,6 +768,11 @@ func (vf *VirtualFile) SetXattr(name string, value []byte, flags p9.XattrFlags) 
 		return syscall.EOPNOTSUPP
 	}
 
+	// Check if path is read-only
+	if vf.registry.IsReadOnly(vf.path) {
+		return syscall.EROFS
+	}
+
 	return syscall.Setxattr(vf.path, name, value, int(flags))
 }
 
@@ -744,6 +817,11 @@ func (vf *VirtualFile) ListXattrs() ([]string, error) {
 func (vf *VirtualFile) RemoveXattr(name string) error {
 	if vf.registry.CheckPath(vf.path) != Exposed {
 		return syscall.EOPNOTSUPP
+	}
+
+	// Check if path is read-only
+	if vf.registry.IsReadOnly(vf.path) {
+		return syscall.EROFS
 	}
 
 	return syscall.Removexattr(vf.path, name)

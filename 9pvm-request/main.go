@@ -32,8 +32,9 @@ type RPCError struct {
 
 // RequestParams represents parameters for the request method
 type RequestParams struct {
-	Path  string `json:"path"`
-	Token string `json:"token"`
+	Path     string `json:"path"`
+	Token    string `json:"token"`
+	ReadOnly bool   `json:"readonly,omitempty"`
 }
 
 // RequestResult represents the result of a successful request
@@ -44,14 +45,21 @@ type RequestResult struct {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: %s <path>\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s <path> [ro]\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "\nRequest a path to be exposed by the host's 9passthrough server.\n")
+		fmt.Fprintf(os.Stderr, "Add 'ro' to request read-only access.\n")
 		fmt.Fprintf(os.Stderr, "This command blocks until the request is approved or denied.\n")
 		os.Exit(1)
 	}
 
 	// Get path argument
 	path := os.Args[1]
+
+	// Check for read-only flag
+	readOnly := false
+	if len(os.Args) > 2 && os.Args[2] == "ro" {
+		readOnly = true
+	}
 
 	// Convert to absolute path
 	absPath, err := filepath.Abs(path)
@@ -79,8 +87,9 @@ func main() {
 
 	// Build request
 	params := RequestParams{
-		Path:  absPath,
-		Token: token,
+		Path:     absPath,
+		Token:    token,
+		ReadOnly: readOnly,
 	}
 
 	request := RPCRequest{
@@ -102,7 +111,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Requesting path: %s\n", absPath)
+	mode := "rw"
+	if readOnly {
+		mode = "ro"
+	}
+	fmt.Printf("Requesting path: %s (%s)\n", absPath, mode)
 	fmt.Println("Waiting for host approval...")
 
 	// Read response (this blocks until approved/denied)
