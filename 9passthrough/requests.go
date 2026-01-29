@@ -26,6 +26,7 @@ type RequestResult struct {
 type PathRequest struct {
 	ID           string
 	Path         string
+	ReadOnly     bool
 	RequestedAt  time.Time
 	Status       RequestStatus
 	VMPID        int
@@ -64,17 +65,18 @@ func NewRequestQueue() *RequestQueue {
 // generateID generates a unique request ID
 func (rq *RequestQueue) generateID() string {
 	rq.sequence++
-	return fmt.Sprintf("req-%d-%03d", time.Now().Unix(), rq.sequence)
+	return fmt.Sprintf("%d", rq.sequence)
 }
 
 // Create creates a new path request and adds it to the queue
-func (rq *RequestQueue) Create(path string, vmPID int) *PathRequest {
+func (rq *RequestQueue) Create(path string, readOnly bool, vmPID int) *PathRequest {
 	rq.mu.Lock()
 	defer rq.mu.Unlock()
 
 	req := &PathRequest{
 		ID:          rq.generateID(),
 		Path:        path,
+		ReadOnly:    readOnly,
 		RequestedAt: time.Now(),
 		Status:      StatusPending,
 		VMPID:       vmPID,

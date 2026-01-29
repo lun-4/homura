@@ -20,6 +20,9 @@ var NinePTargetDir *string
 // NinePTargetPID is set by main.go to the -p flag value
 var NinePTargetPID *int
 
+// NinePTargetVMID is set by main.go to the -vm flag value
+var NinePTargetVMID *int
+
 // RPCRequest represents a JSON-RPC request
 type RPCRequest struct {
 	Method string      `json:"method"`
@@ -75,6 +78,7 @@ type StatusResult struct {
 type RequestInfo struct {
 	ID          string `json:"id"`
 	Path        string `json:"path"`
+	ReadOnly    bool   `json:"readonly"`
 	RequestedAt string `json:"requested_at"`
 	VMPID       int    `json:"vm_pid"`
 	Status      string `json:"status"`
@@ -102,9 +106,18 @@ type MessageResult struct {
 	Message string `json:"message"`
 }
 
-// getTargetVM finds the VM to control based on -p flag, -d flag, or current directory
+// getTargetVM finds the VM to control based on -vm flag, -p flag, -d flag, or current directory
 func getTargetVM() (*vm.VMSlot, error) {
-	// Check for PID-based lookup first
+	// Check for VM slot ID lookup first
+	if NinePTargetVMID != nil && *NinePTargetVMID != 0 {
+		slot, err := vm.FindVMBySlot(*NinePTargetVMID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to find VM with slot %d: %w", *NinePTargetVMID, err)
+		}
+		return slot, nil
+	}
+
+	// Check for PID-based lookup
 	if NinePTargetPID != nil && *NinePTargetPID != 0 {
 		slot, err := vm.FindVMByNinePPID(*NinePTargetPID)
 		if err != nil {
@@ -422,8 +435,12 @@ func NinePReqList(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Pending requests (%d):\n", len(result.Requests))
 	for _, req := range result.Requests {
-		fmt.Printf("  [%s] %s (pid %d, requested at %s)\n",
-			req.ID, req.Path, req.VMPID, req.RequestedAt)
+		mode := "rw"
+		if req.ReadOnly {
+			mode = "ro"
+		}
+		fmt.Printf("  [%s] %s (%s) (pid %d, requested at %s)\n",
+			req.ID, req.Path, mode, req.VMPID, req.RequestedAt)
 	}
 
 	return nil

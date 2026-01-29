@@ -10,9 +10,10 @@ import (
 )
 
 var (
-	forceFlag      bool
-	ninepTargetDir string // Global flag for all 9p commands
-	ninepTargetPID int    // Target 9passthrough by PID
+	forceFlag       bool
+	ninepTargetDir  string // Global flag for all 9p commands
+	ninepTargetPID  int    // Target 9passthrough by PID
+	ninepTargetVMID int    // Target VM by slot number
 )
 
 var rootCmd = &cobra.Command{
@@ -138,17 +139,19 @@ var ninepReqListCmd = &cobra.Command{
 }
 
 var ninepReqApproveCmd = &cobra.Command{
-	Use:   "approve <request-id>",
-	Short: "Approve a VM path request",
-	Args:  cobra.ExactArgs(1),
-	RunE:  commands.NinePReqApprove,
+	Use:     "approve <request-id>",
+	Aliases: []string{"ok"},
+	Short:   "Approve a VM path request",
+	Args:    cobra.ExactArgs(1),
+	RunE:    commands.NinePReqApprove,
 }
 
 var ninepReqDenyCmd = &cobra.Command{
-	Use:   "deny <request-id> [reason]",
-	Short: "Deny a VM path request",
-	Args:  cobra.RangeArgs(1, 2),
-	RunE:  commands.NinePReqDeny,
+	Use:     "deny <request-id> [reason]",
+	Aliases: []string{"no"},
+	Short:   "Deny a VM path request",
+	Args:    cobra.RangeArgs(1, 2),
+	RunE:    commands.NinePReqDeny,
 }
 
 func init() {
@@ -164,15 +167,18 @@ func init() {
 	// Add vm subcommands
 	vmCmd.AddCommand(vmSshCmd)
 
-	// Add -d and -p flags to all 9p commands
+	// Add -d, -p, and -vm flags to all 9p commands
 	ninepCmd.PersistentFlags().StringVarP(&ninepTargetDir, "dir", "d", "",
 		"Target VM by working directory (defaults to current directory)")
 	ninepCmd.PersistentFlags().IntVarP(&ninepTargetPID, "pid", "p", 0,
 		"Target VM by 9passthrough PID")
+	ninepCmd.PersistentFlags().IntVar(&ninepTargetVMID, "vm", 0,
+		"Target VM by slot number")
 
 	// Make flags available to commands package
 	commands.NinePTargetDir = &ninepTargetDir
 	commands.NinePTargetPID = &ninepTargetPID
+	commands.NinePTargetVMID = &ninepTargetVMID
 
 	ninepCmd.AddCommand(ninepExposeCmd)
 	ninepCmd.AddCommand(ninepUnexposeCmd)

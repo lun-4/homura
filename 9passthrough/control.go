@@ -446,7 +446,7 @@ func (cs *ControlServer) handleRequestMethod(req RPCRequest) RPCResponse {
 	}
 
 	// Create path request
-	pathReq := cs.requestQueue.Create(params.Path, cs.vmPID)
+	pathReq := cs.requestQueue.Create(params.Path, params.ReadOnly, cs.vmPID)
 
 	// Send desktop notification
 	cs.notifyRequest(pathReq)
@@ -496,6 +496,7 @@ func (cs *ControlServer) handleReqList(req RPCRequest) RPCResponse {
 	type RequestInfo struct {
 		ID          string `json:"id"`
 		Path        string `json:"path"`
+		ReadOnly    bool   `json:"readonly"`
 		RequestedAt string `json:"requested_at"`
 		VMPID       int    `json:"vm_pid"`
 		Status      string `json:"status"`
@@ -506,6 +507,7 @@ func (cs *ControlServer) handleReqList(req RPCRequest) RPCResponse {
 		result = append(result, RequestInfo{
 			ID:          r.ID,
 			Path:        r.Path,
+			ReadOnly:    r.ReadOnly,
 			RequestedAt: r.RequestedAt.Format(time.RFC3339),
 			VMPID:       r.VMPID,
 			Status:      string(r.Status),
