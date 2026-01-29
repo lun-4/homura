@@ -212,6 +212,18 @@ func NewVM() (*VM, error) {
 func (vm *VM) Start() error {
 	slog.Info("Starting VM")
 
+	// Run pre-start snapshot if configured
+	vmConfig, err := LoadVMConfig()
+	if err != nil {
+		slog.Warn("Failed to load VM config for snapshot", "error", err)
+	} else if vmConfig != nil && len(vmConfig.GetSnapshotPaths()) > 0 {
+		slog.Info("Creating pre-start snapshot")
+		if err := CreateSnapshot(vmConfig.GetSnapshotPaths(), vmConfig.GetMaxSnapshots()); err != nil {
+			slog.Warn("Failed to create snapshot", "error", err)
+			// Continue with VM start even if snapshot fails
+		}
+	}
+
 	// Start passt first
 	if err := vm.PasstManager.Start(); err != nil {
 		return fmt.Errorf("failed to start passt: %w", err)

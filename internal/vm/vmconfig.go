@@ -11,7 +11,28 @@ import (
 // VMConfig represents the persistent VM configuration
 type VMConfig struct {
 	ConfigVersion int      `json:"configVersion"`
-	AllowPaths    []string `json:"allowPaths"` // Paths with optional :ro/:rw suffix
+	AllowPaths    []string `json:"allowPaths"`    // Paths with optional :ro/:rw suffix
+	Snapshot      []string `json:"snapshot"`      // Paths to snapshot before each VM start
+	MaxSnapshots  *int     `json:"maxSnapshots"`  // Max snapshots to keep (default 7)
+}
+
+// DefaultMaxSnapshots is the default number of snapshots to keep
+const DefaultMaxSnapshots = 7
+
+// GetMaxSnapshots returns the max snapshots setting, defaulting to 7
+func (c *VMConfig) GetMaxSnapshots() int {
+	if c == nil || c.MaxSnapshots == nil {
+		return DefaultMaxSnapshots
+	}
+	return *c.MaxSnapshots
+}
+
+// GetSnapshotPaths returns the list of paths to snapshot
+func (c *VMConfig) GetSnapshotPaths() []string {
+	if c == nil {
+		return nil
+	}
+	return c.Snapshot
 }
 
 // PathSpec represents a parsed path specification
