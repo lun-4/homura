@@ -74,6 +74,28 @@ homura 9p expose /path/to/files
 # Files accessible at /mnt/host inside VM
 ```
 
+## Persistent Path Configuration
+
+You can configure paths to be automatically exposed every time a VM starts by creating `~/.config/homura/vm.json`:
+
+```json
+{
+  "configVersion": 1,
+  "allowPaths": [
+    "/home/luna/.config/fish:ro",
+    "/home/luna/projects:rw",
+    "/home/luna/bin"
+  ]
+}
+```
+
+**Path format:**
+- `/path:ro` - expose as read-only
+- `/path:rw` - expose as read-write (explicit)
+- `/path` - expose as read-write (default)
+
+**Note:** The current working directory is always exposed as read-write, regardless of this config. The `allowPaths` setting adds *additional* persistent paths.
+
 ## 9p Filesystem Passthrough
 
 homura VMs support 9p filesystem passthrough, allowing the VM to access host directories securely.

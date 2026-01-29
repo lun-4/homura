@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/hugelgupf/p9/p9"
@@ -42,6 +43,18 @@ func allocateControlPort() (int, error) {
 	return 0, fmt.Errorf("no available control ports (tried 5641-5650)")
 }
 
+// parsePathSpec parses a path specification like "/path:ro" or "/path:rw" or "/path"
+// Returns the path and whether it's read-only. Default is read-write.
+func parsePathSpec(spec string) (path string, readOnly bool) {
+	if strings.HasSuffix(spec, ":ro") {
+		return strings.TrimSuffix(spec, ":ro"), true
+	}
+	if strings.HasSuffix(spec, ":rw") {
+		return strings.TrimSuffix(spec, ":rw"), false
+	}
+	return spec, false
+}
+
 func main() {
 	// Parse optional initial paths from command line
 	var initialPaths []string
@@ -68,12 +81,18 @@ func main() {
 	registry := NewPathRegistry()
 	requestQueue = NewRequestQueue()
 
-	// Add initial paths if provided (default to read-write)
-	for _, path := range initialPaths {
-		if err := registry.AddPath(path, false); err != nil {
+	// Add initial paths if provided
+	// Format: "/path" (default rw) or "/path:ro" (read-only) or "/path:rw" (explicit rw)
+	for _, pathSpec := range initialPaths {
+		path, readOnly := parsePathSpec(pathSpec)
+		if err := registry.AddPath(path, readOnly); err != nil {
 			log.Printf("Warning: Failed to add initial path %s: %v", path, err)
 		} else {
-			log.Printf("Initially exposed: %s (rw)", path)
+			mode := "rw"
+			if readOnly {
+				mode = "ro"
+			}
+			log.Printf("Initially exposed: %s (%s)", path, mode)
 		}
 	}
 

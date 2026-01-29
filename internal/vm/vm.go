@@ -57,6 +57,12 @@ func NewVM() (*VM, error) {
 		return nil, fmt.Errorf("failed to get working directory: %w", err)
 	}
 
+	// Load persistent VM config
+	vmConfig, err := LoadVMConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load VM config: %w", err)
+	}
+
 	// Create temporary state directory
 	stateDir, err := os.MkdirTemp("", "homura-vm-*")
 	if err != nil {
@@ -82,7 +88,16 @@ func NewVM() (*VM, error) {
 		return nil, fmt.Errorf("9passthrough binary not found at %s (run 'make 9p' to build)", ninepBinary)
 	}
 
-	ninepCmd := exec.Command(ninepBinary, workDir)
+	// Build args: workDir first, then any configured paths
+	ninepArgs := []string{workDir}
+	if vmConfig != nil {
+		for _, spec := range vmConfig.GetAllowPaths() {
+			ninepArgs = append(ninepArgs, spec.FormatPathArg())
+			slog.Info("Adding configured path", "path", spec.Path, "readonly", spec.ReadOnly)
+		}
+	}
+
+	ninepCmd := exec.Command(ninepBinary, ninepArgs...)
 	if err := ninepCmd.Start(); err != nil {
 		os.RemoveAll(stateDir)
 		return nil, fmt.Errorf("failed to start 9passthrough: %w", err)
