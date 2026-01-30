@@ -27,6 +27,9 @@ var dockerfileContent string
 //go:embed resources/init
 var initScriptContent string
 
+//go:embed resources/CLAUDE.md
+var builtinClaudeMd string
+
 // ImagePaths holds paths to all VM images
 type ImagePaths struct {
 	CacheDir          string
@@ -733,6 +736,16 @@ if grep -q "p9.token=" /proc/cmdline; then
                 ln -sf "/mnt/host${HOST_HOME}/.claude" /root/.claude
                 echo "Symlinked /root/.claude"
             fi
+
+            # Append user VM CLAUDE.md customizations if they exist
+            USER_CLAUDE="/mnt/host${HOST_HOME}/.config/homura/CLAUDE.md"
+            if [ -f "$USER_CLAUDE" ]; then
+                echo "" >> /etc/homura/claude-config/CLAUDE.md
+                echo "# User Customizations" >> /etc/homura/claude-config/CLAUDE.md
+                echo "" >> /etc/homura/claude-config/CLAUDE.md
+                cat "$USER_CLAUDE" >> /etc/homura/claude-config/CLAUDE.md
+                echo "Appended user CLAUDE.md customizations"
+            fi
         fi
     else
         echo "Failed to mount 9p filesystem via FUSE"
@@ -746,6 +759,16 @@ fi
 	ninepScriptPath := filepath.Join(localDDir, "9pmount.start")
 	if err := os.WriteFile(ninepScriptPath, []byte(ninepScript), 0755); err != nil {
 		return fmt.Errorf("failed to write 9p mount script: %w", err)
+	}
+
+	// Write builtin CLAUDE.md for VM
+	claudeConfigDir := filepath.Join(mountDir, "etc", "homura", "claude-config")
+	if err := os.MkdirAll(claudeConfigDir, 0755); err != nil {
+		return fmt.Errorf("failed to create claude-config dir: %w", err)
+	}
+	claudeMdPath := filepath.Join(claudeConfigDir, "CLAUDE.md")
+	if err := os.WriteFile(claudeMdPath, []byte(builtinClaudeMd), 0644); err != nil {
+		return fmt.Errorf("failed to write builtin CLAUDE.md: %w", err)
 	}
 
 	// Copy FUSE kernel module from modloop to rootfs

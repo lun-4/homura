@@ -110,6 +110,13 @@ func NewVM() (*VM, error) {
 		slog.Info("Auto-exposing Claude config", "path", claudeDir)
 	}
 
+	// Auto-expose VM CLAUDE.md customizations (read-only)
+	vmClaudeMd := filepath.Join(homeDir, ".config", "homura", "CLAUDE.md")
+	if _, err := os.Stat(vmClaudeMd); err == nil {
+		ninepArgs = append(ninepArgs, vmClaudeMd+":ro")
+		slog.Info("Auto-exposing VM CLAUDE.md (read-only)", "path", vmClaudeMd)
+	}
+
 	ninepCmd := exec.Command(ninepBinary, ninepArgs...)
 	if err := ninepCmd.Start(); err != nil {
 		os.RemoveAll(stateDir)
