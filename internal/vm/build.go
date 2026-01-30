@@ -415,17 +415,59 @@ func buildInitramfs(paths *ImagePaths) error {
 
 // buildRootfs creates an ext4 rootfs image using Docker and fuse2fs
 func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
-	if _, err := os.Stat(paths.RootfsPath); err == nil {
-		slog.Debug("Rootfs already exists", "path", paths.RootfsPath)
-		return nil
-	}
-
 	slog.Info("Building rootfs image")
 
 	// Read SSH public key
 	sshPubKey, err := os.ReadFile(sshPubKeyPath)
 	if err != nil {
 		return fmt.Errorf("failed to read SSH public key: %w", err)
+	}
+
+	// Detect docker or podman
+	dockerCmd := "docker"
+	if _, err := exec.LookPath("podman"); err == nil {
+		dockerCmd = "podman"
+	}
+
+	// Check if base image already exists
+	baseImageName := fmt.Sprintf("homura-vm-alpine-base:v%d", VMImplementationVersion)
+	baseImageExists := false
+	checkBaseCmd := exec.Command(dockerCmd, "image", "inspect", baseImageName)
+	if err := checkBaseCmd.Run(); err == nil {
+		baseImageExists = true
+	}
+
+	// Get base image ID (or placeholder if image doesn't exist yet)
+	var baseImageID string
+	if baseImageExists {
+		baseImageID, _ = getImageID(dockerCmd, baseImageName)
+	}
+
+	// Determine final rootfs filename and image name BEFORE checking if rootfs exists
+	finalImageName := baseImageName
+	customDockerfilePath := filepath.Join(os.Getenv("HOME"), ".config", "homura", "Dockerfile.custom")
+	var customContent []byte
+	hasCustomDockerfile := false
+
+	if fileInfo, err := os.Stat(customDockerfilePath); err == nil && !fileInfo.IsDir() {
+		if content, err := os.ReadFile(customDockerfilePath); err == nil {
+			customContent = content
+			hasCustomDockerfile = true
+
+			// If base image exists, calculate the hash for rootfs filename
+			if baseImageID != "" {
+				combinedHash := hashCustomImage(customContent, baseImageID)
+				newRootfsFilename := fmt.Sprintf("rootfs-%s.ext4", combinedHash)
+				paths.RootfsPath = filepath.Join(paths.CacheDir, newRootfsFilename)
+				slog.Debug("Using custom rootfs filename", "filename", newRootfsFilename, "hash", combinedHash)
+			}
+		}
+	}
+
+	// Now check if rootfs already exists (with the correct filename)
+	if _, err := os.Stat(paths.RootfsPath); err == nil {
+		slog.Debug("Rootfs already exists", "path", paths.RootfsPath)
+		return nil
 	}
 
 	// Create temp directory for build
@@ -475,58 +517,39 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 		return fmt.Errorf("failed to copy test-fs source: %w", err)
 	}
 
+	// Build Docker base image if needed
+	if !baseImageExists {
+		slog.Info("Building Docker base image (this may take a few minutes)")
+		cmd := exec.Command(dockerCmd, "build",
+			"--build-arg", fmt.Sprintf("SSH_PUB_KEY=%s", strings.TrimSpace(string(sshPubKey))),
+			"-t", baseImageName,
+			tmpDir)
+		cmd.Stdout = os.Stderr
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("docker build failed: %w", err)
+		}
 
-	// Detect docker or podman
-	dockerCmd := "docker"
-	if _, err := exec.LookPath("podman"); err == nil {
-		dockerCmd = "podman"
-	}
+		// Get the new base image ID
+		baseImageID, err = getImageID(dockerCmd, baseImageName)
+		if err != nil {
+			return fmt.Errorf("failed to get base image ID: %w", err)
+		}
 
-	// Build Docker base image
-	slog.Info("Building Docker base image (this may take a few minutes)")
-	baseImageName := fmt.Sprintf("homura-vm-alpine-base:v%d", VMImplementationVersion)
-	cmd := exec.Command(dockerCmd, "build",
-		"--build-arg", fmt.Sprintf("SSH_PUB_KEY=%s", strings.TrimSpace(string(sshPubKey))),
-		"-t", baseImageName,
-		tmpDir)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("docker build failed: %w", err)
-	}
-
-	// Determine final image to export
-	finalImageName := baseImageName
-
-	// Get base image ID for cache busting
-	baseImageID, err := getImageID(dockerCmd, baseImageName)
-	if err != nil {
-		return fmt.Errorf("failed to get base image ID: %w", err)
-	}
-
-	// Update rootfs filename if custom Dockerfile exists
-	customDockerfilePath := filepath.Join(os.Getenv("HOME"), ".config", "homura", "Dockerfile.custom")
-	if fileInfo, err := os.Stat(customDockerfilePath); err == nil && !fileInfo.IsDir() {
-		if customContent, err := os.ReadFile(customDockerfilePath); err == nil {
+		// Recalculate rootfs path with actual base image ID if custom Dockerfile exists
+		if hasCustomDockerfile {
 			combinedHash := hashCustomImage(customContent, baseImageID)
 			newRootfsFilename := fmt.Sprintf("rootfs-%s.ext4", combinedHash)
-
-			// Update paths.RootfsPath
 			paths.RootfsPath = filepath.Join(paths.CacheDir, newRootfsFilename)
 			slog.Debug("Using custom rootfs filename", "filename", newRootfsFilename, "hash", combinedHash)
 		}
+	} else {
+		slog.Info("Using cached Docker base image")
 	}
 
-	// Check for custom Dockerfile
-	customDockerfilePath = filepath.Join(os.Getenv("HOME"), ".config", "homura", "Dockerfile.custom")
-	if fileInfo, err := os.Stat(customDockerfilePath); err == nil && !fileInfo.IsDir() {
+	// Handle custom Dockerfile
+	if hasCustomDockerfile {
 		slog.Info("Found custom Dockerfile", "path", customDockerfilePath)
-
-		// Read custom Dockerfile contents
-		customContent, err := os.ReadFile(customDockerfilePath)
-		if err != nil {
-			return fmt.Errorf("read custom Dockerfile: %w", err)
-		}
 
 		// Validate FROM line matches current version
 		expectedFrom := fmt.Sprintf("FROM homura-vm-alpine-base:v%d", VMImplementationVersion)
@@ -585,7 +608,7 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 	slog.Info("Exporting container to tar")
 
 	containerName := fmt.Sprintf("homura-temp-%x", sha256.Sum256([]byte(tarPath)))
-	cmd = exec.Command(dockerCmd, "create", "--name", containerName, finalImageName)
+	cmd := exec.Command(dockerCmd, "create", "--name", containerName, finalImageName)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("docker create failed: %w", err)
 	}
