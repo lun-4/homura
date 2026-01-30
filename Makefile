@@ -10,8 +10,8 @@ build:
 	@mkdir -p ~/.cache/homura/bin
 	@mkdir -p ~/.cache/homura/src
 	cd 9passthrough && go build -o ~/.cache/homura/bin/9passthrough .
-	cd 9pvm-request && go build -o ~/.cache/homura/bin/9pvm-request .
-	cd guest/9pfuse && go build -o ~/.cache/homura/bin/9pfuse .
+	cd 9pvm-request && CGO_ENABLED=0 go build -o ~/.cache/homura/bin/9pvm-request .
+	cd guest/9pfuse && CGO_ENABLED=0 go build -o ~/.cache/homura/bin/9pfuse .
 	cd test-fs && go build -o ~/.cache/homura/bin/test-fs .
 	@rm -rf ~/.cache/homura/src/9pvm-request
 	@rm -rf ~/.cache/homura/src/9pfuse
