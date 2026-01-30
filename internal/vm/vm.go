@@ -89,24 +89,25 @@ func NewVM() (*VM, error) {
 		return nil, fmt.Errorf("9passthrough binary not found at %s (run 'make 9p' to build)", ninepBinary)
 	}
 
-	// Build args: workDir first, then any configured paths
+	// Build args: collect builtin paths first, then add non-duplicate configured paths
+	// addedPaths tracks all paths sent to 9passthrough (true = read-only, false = read-write)
+	addedPaths := make(map[string]bool)
+
+	// workDir is always first and read-write
 	ninepArgs := []string{workDir}
-	if vmConfig != nil {
-		for _, spec := range vmConfig.GetAllowPaths() {
-			ninepArgs = append(ninepArgs, spec.FormatPathArg())
-			slog.Info("Adding configured path", "path", spec.Path, "readonly", spec.ReadOnly)
-		}
-	}
+	addedPaths[workDir] = false
 
 	// Auto-expose Claude config files (read-write to allow updates)
 	claudeJson := filepath.Join(homeDir, ".claude.json")
 	claudeDir := filepath.Join(homeDir, ".claude")
 	if _, err := os.Stat(claudeJson); err == nil {
 		ninepArgs = append(ninepArgs, claudeJson)
+		addedPaths[claudeJson] = false
 		slog.Info("Auto-exposing Claude config", "path", claudeJson)
 	}
 	if _, err := os.Stat(claudeDir); err == nil {
 		ninepArgs = append(ninepArgs, claudeDir)
+		addedPaths[claudeDir] = false
 		slog.Info("Auto-exposing Claude config", "path", claudeDir)
 	}
 
@@ -114,7 +115,21 @@ func NewVM() (*VM, error) {
 	vmClaudeMd := filepath.Join(homeDir, ".config", "homura", "CLAUDE.md")
 	if _, err := os.Stat(vmClaudeMd); err == nil {
 		ninepArgs = append(ninepArgs, vmClaudeMd+":ro")
+		addedPaths[vmClaudeMd] = true
 		slog.Info("Auto-exposing VM CLAUDE.md (read-only)", "path", vmClaudeMd)
+	}
+
+	// Add configured paths from vm.json, skipping any duplicates
+	if vmConfig != nil {
+		for _, spec := range vmConfig.GetAllowPaths() {
+			if _, alreadyAdded := addedPaths[spec.Path]; alreadyAdded {
+				slog.Info("Skipping configured path (already added)", "path", spec.Path)
+				continue
+			}
+			ninepArgs = append(ninepArgs, spec.FormatPathArg())
+			addedPaths[spec.Path] = spec.ReadOnly
+			slog.Info("Adding configured path", "path", spec.Path, "readonly", spec.ReadOnly)
+		}
 	}
 
 	ninepCmd := exec.Command(ninepBinary, ninepArgs...)
