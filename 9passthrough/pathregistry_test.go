@@ -32,7 +32,7 @@ func TestAddPath(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Test adding a valid path
-	if err := registry.AddPath(tmpDir); err != nil {
+	if err := registry.AddPath(tmpDir, false); err != nil {
 		t.Fatalf("AddPath failed: %v", err)
 	}
 
@@ -42,18 +42,18 @@ func TestAddPath(t *testing.T) {
 	}
 
 	// Test adding the same path again (should succeed)
-	if err := registry.AddPath(tmpDir); err != nil {
+	if err := registry.AddPath(tmpDir, false); err != nil {
 		t.Errorf("AddPath failed on duplicate: %v", err)
 	}
 
 	// Test adding a non-existent path
 	nonExistent := filepath.Join(tmpDir, "does-not-exist")
-	if err := registry.AddPath(nonExistent); err == nil {
+	if err := registry.AddPath(nonExistent, false); err == nil {
 		t.Error("AddPath should fail for non-existent path")
 	}
 
 	// Test adding a relative path
-	if err := registry.AddPath("relative/path"); err == nil {
+	if err := registry.AddPath("relative/path", false); err == nil {
 		t.Error("AddPath should fail for relative path")
 	}
 }
@@ -69,7 +69,7 @@ func TestRemovePath(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Add and then remove a path
-	if err := registry.AddPath(tmpDir); err != nil {
+	if err := registry.AddPath(tmpDir, false); err != nil {
 		t.Fatalf("AddPath failed: %v", err)
 	}
 
@@ -100,7 +100,7 @@ func TestCheckPath(t *testing.T) {
 	}
 
 	// Add the nested path
-	if err := registry.AddPath(nestedDir); err != nil {
+	if err := registry.AddPath(nestedDir, false); err != nil {
 		t.Fatalf("AddPath failed: %v", err)
 	}
 
@@ -152,10 +152,10 @@ func TestListPaths(t *testing.T) {
 	defer os.RemoveAll(tmpDir2)
 
 	// Add paths
-	if err := registry.AddPath(tmpDir1); err != nil {
+	if err := registry.AddPath(tmpDir1, false); err != nil {
 		t.Fatalf("AddPath failed: %v", err)
 	}
-	if err := registry.AddPath(tmpDir2); err != nil {
+	if err := registry.AddPath(tmpDir2, false); err != nil {
 		t.Fatalf("AddPath failed: %v", err)
 	}
 
@@ -169,10 +169,10 @@ func TestListPaths(t *testing.T) {
 	foundDir1 := false
 	foundDir2 := false
 	for _, p := range paths {
-		if p == tmpDir1 {
+		if p.Path == tmpDir1 {
 			foundDir1 = true
 		}
-		if p == tmpDir2 {
+		if p.Path == tmpDir2 {
 			foundDir2 = true
 		}
 	}
@@ -206,10 +206,10 @@ func TestGetExposedChildren(t *testing.T) {
 	}
 
 	// Expose only dir1 and dir2
-	if err := registry.AddPath(dir1); err != nil {
+	if err := registry.AddPath(dir1, false); err != nil {
 		t.Fatalf("AddPath failed: %v", err)
 	}
-	if err := registry.AddPath(dir2); err != nil {
+	if err := registry.AddPath(dir2, false); err != nil {
 		t.Fatalf("AddPath failed: %v", err)
 	}
 
@@ -264,10 +264,10 @@ func TestOverlappingPaths(t *testing.T) {
 	}
 
 	// Add both parent and child
-	if err := registry.AddPath(tmpDir); err != nil {
+	if err := registry.AddPath(tmpDir, false); err != nil {
 		t.Fatalf("AddPath failed: %v", err)
 	}
-	if err := registry.AddPath(nestedDir); err != nil {
+	if err := registry.AddPath(nestedDir, false); err != nil {
 		t.Fatalf("AddPath failed: %v", err)
 	}
 

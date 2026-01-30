@@ -34,7 +34,7 @@ func TestIntegration_GetXattr_UserAttr(t *testing.T) {
 	}
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -73,7 +73,7 @@ func TestIntegration_SetXattr_Create(t *testing.T) {
 	})
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -128,7 +128,7 @@ func TestIntegration_SetXattr_Replace(t *testing.T) {
 	}
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -187,7 +187,7 @@ func TestIntegration_ListXattrs_Multiple(t *testing.T) {
 	}
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -242,7 +242,7 @@ func TestIntegration_RemoveXattr_Existing(t *testing.T) {
 	}
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -287,7 +287,7 @@ func TestIntegration_Xattr_VirtualAncestor(t *testing.T) {
 
 	registry := NewPathRegistry()
 	deepPath := filepath.Join(tempDir, "deep", "path")
-	if err := registry.AddPath(deepPath); err != nil {
+	if err := registry.AddPath(deepPath, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -326,7 +326,7 @@ func TestIntegration_LargeFile_ReadWrite(t *testing.T) {
 	createLargeFile(t, largePath, 100*1024*1024)
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -379,7 +379,7 @@ func TestIntegration_Readdir_Pagination(t *testing.T) {
 	})
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -442,7 +442,7 @@ func TestIntegration_Readdir_LargeDirectory(t *testing.T) {
 	}
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -485,7 +485,7 @@ func TestIntegration_QID_Consistency(t *testing.T) {
 	})
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -525,7 +525,7 @@ func TestIntegration_WalkGetAttr_Optimization(t *testing.T) {
 	})
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -568,7 +568,7 @@ func TestIntegration_StatFS_ExposedPath(t *testing.T) {
 	})
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -608,7 +608,7 @@ func TestIntegration_StatFS_VirtualAncestor(t *testing.T) {
 
 	registry := NewPathRegistry()
 	deepPath := filepath.Join(tempDir, "deep", "path")
-	if err := registry.AddPath(deepPath); err != nil {
+	if err := registry.AddPath(deepPath, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -641,7 +641,7 @@ func TestIntegration_MultipleClients(t *testing.T) {
 	})
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -705,7 +705,7 @@ func TestIntegration_ConcurrentReads(t *testing.T) {
 	})
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -784,7 +784,7 @@ func TestIntegration_ConcurrentWrites(t *testing.T) {
 	}
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 

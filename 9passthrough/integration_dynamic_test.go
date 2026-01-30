@@ -15,7 +15,7 @@ func TestIntegration_OpenFileUnexpose(t *testing.T) {
 	})
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -75,7 +75,7 @@ func TestIntegration_OpenDirUnexpose(t *testing.T) {
 	})
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -124,7 +124,7 @@ func TestIntegration_WalkAfterUnexpose(t *testing.T) {
 	})
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -160,7 +160,7 @@ func TestIntegration_ReExposeAfterUnexpose(t *testing.T) {
 	})
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -190,7 +190,7 @@ func TestIntegration_ReExposeAfterUnexpose(t *testing.T) {
 	}
 
 	// Re-expose
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to re-expose path: %v", err)
 	}
 
@@ -227,7 +227,7 @@ func TestIntegration_ExposeParentOfChild(t *testing.T) {
 
 	// First expose child
 	childPath := filepath.Join(tempDir, "parent", "child")
-	if err := registry.AddPath(childPath); err != nil {
+	if err := registry.AddPath(childPath, false); err != nil {
 		t.Fatalf("Failed to expose child: %v", err)
 	}
 
@@ -248,7 +248,7 @@ func TestIntegration_ExposeParentOfChild(t *testing.T) {
 
 	// Now expose parent
 	parentPath := filepath.Join(tempDir, "parent")
-	if err := registry.AddPath(parentPath); err != nil {
+	if err := registry.AddPath(parentPath, false); err != nil {
 		t.Fatalf("Failed to expose parent: %v", err)
 	}
 
@@ -300,7 +300,7 @@ func TestIntegration_ExposeChildOfParent(t *testing.T) {
 
 	// First expose parent
 	parentPath := filepath.Join(tempDir, "parent")
-	if err := registry.AddPath(parentPath); err != nil {
+	if err := registry.AddPath(parentPath, false); err != nil {
 		t.Fatalf("Failed to expose parent: %v", err)
 	}
 
@@ -336,7 +336,7 @@ func TestIntegration_ExposeChildOfParent(t *testing.T) {
 
 	// Now also expose child explicitly (redundant, but should work)
 	childPath := filepath.Join(tempDir, "parent", "child")
-	if err := registry.AddPath(childPath); err != nil {
+	if err := registry.AddPath(childPath, false); err != nil {
 		t.Fatalf("Failed to expose child: %v", err)
 	}
 
@@ -355,7 +355,7 @@ func TestIntegration_WriteAfterUnexpose(t *testing.T) {
 	})
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -414,7 +414,7 @@ func TestIntegration_NewOpenAfterUnexpose(t *testing.T) {
 	})
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 

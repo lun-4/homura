@@ -120,7 +120,7 @@ func TestIntegration_ExposeSinglePath(t *testing.T) {
 
 	// Setup server with exposed path
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tmpDir); err != nil {
+	if err := registry.AddPath(tmpDir, false); err != nil {
 		t.Fatalf("Failed to expose path: %v", err)
 	}
 
@@ -223,7 +223,7 @@ func TestIntegration_VirtualAncestors(t *testing.T) {
 
 	// Only expose the deep nested path
 	registry := NewPathRegistry()
-	if err := registry.AddPath(nestedPath); err != nil {
+	if err := registry.AddPath(nestedPath, false); err != nil {
 		t.Fatalf("Failed to expose path: %v", err)
 	}
 
@@ -323,7 +323,7 @@ func TestIntegration_OpenExposedDirectory(t *testing.T) {
 
 	// Setup server with exposed path
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tmpDir); err != nil {
+	if err := registry.AddPath(tmpDir, false); err != nil {
 		t.Fatalf("Failed to expose path: %v", err)
 	}
 
@@ -434,7 +434,7 @@ func TestIntegration_ReadFileInExposedDirectory(t *testing.T) {
 
 	// Setup server with exposed path
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tmpDir); err != nil {
+	if err := registry.AddPath(tmpDir, false); err != nil {
 		t.Fatalf("Failed to expose path: %v", err)
 	}
 
@@ -491,7 +491,7 @@ func TestIntegration_CreateFileInExposedDirectory(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tmpDir); err != nil {
+	if err := registry.AddPath(tmpDir, false); err != nil {
 		t.Fatalf("AddPath failed: %v", err)
 	}
 
@@ -558,7 +558,7 @@ func TestIntegration_CreateFileWithGID(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tmpDir); err != nil {
+	if err := registry.AddPath(tmpDir, false); err != nil {
 		t.Fatalf("AddPath failed: %v", err)
 	}
 
@@ -634,7 +634,7 @@ func TestIntegration_DynamicExpose(t *testing.T) {
 	registry := NewPathRegistry()
 
 	// Start with only first directory exposed
-	if err := registry.AddPath(tmpDir1); err != nil {
+	if err := registry.AddPath(tmpDir1, false); err != nil {
 		t.Fatalf("Failed to expose path: %v", err)
 	}
 
@@ -662,7 +662,7 @@ func TestIntegration_DynamicExpose(t *testing.T) {
 	dir1.Close()
 
 	// Dynamically expose second directory
-	if err := registry.AddPath(tmpDir2); err != nil {
+	if err := registry.AddPath(tmpDir2, false); err != nil {
 		t.Fatalf("Failed to dynamically expose path: %v", err)
 	}
 

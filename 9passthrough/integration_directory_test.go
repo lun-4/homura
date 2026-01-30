@@ -16,7 +16,7 @@ func TestIntegration_Mkdir_InExposedDir(t *testing.T) {
 	})
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -61,7 +61,7 @@ func TestIntegration_Mkdir_WithMode(t *testing.T) {
 	})
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -97,7 +97,7 @@ func TestIntegration_Mkdir_InVirtualAncestor(t *testing.T) {
 
 	registry := NewPathRegistry()
 	deepPath := filepath.Join(tempDir, "deep", "path")
-	if err := registry.AddPath(deepPath); err != nil {
+	if err := registry.AddPath(deepPath, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -130,7 +130,7 @@ func TestIntegration_Mkdir_AlreadyExists(t *testing.T) {
 	})
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -162,7 +162,7 @@ func TestIntegration_Mkdir_ThenWalk(t *testing.T) {
 	})
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -210,7 +210,7 @@ func TestIntegration_UnlinkAt_File(t *testing.T) {
 	})
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -249,7 +249,7 @@ func TestIntegration_UnlinkAt_EmptyDirectory(t *testing.T) {
 	})
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -285,7 +285,7 @@ func TestIntegration_UnlinkAt_NonEmptyDir(t *testing.T) {
 	})
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -323,7 +323,7 @@ func TestIntegration_UnlinkAt_VirtualAncestor(t *testing.T) {
 
 	registry := NewPathRegistry()
 	deepPath := filepath.Join(tempDir, "deep", "path")
-	if err := registry.AddPath(deepPath); err != nil {
+	if err := registry.AddPath(deepPath, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -356,7 +356,7 @@ func TestIntegration_RenameAt_SameDir(t *testing.T) {
 	})
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -399,10 +399,10 @@ func TestIntegration_RenameAt_AcrossDirs(t *testing.T) {
 	registry := NewPathRegistry()
 	dir1Path := filepath.Join(tempDir, "dir1")
 	dir2Path := filepath.Join(tempDir, "dir2")
-	if err := registry.AddPath(dir1Path); err != nil {
+	if err := registry.AddPath(dir1Path, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
-	if err := registry.AddPath(dir2Path); err != nil {
+	if err := registry.AddPath(dir2Path, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
@@ -451,7 +451,7 @@ func TestIntegration_RenameAt_OverwriteExisting(t *testing.T) {
 	})
 
 	registry := NewPathRegistry()
-	if err := registry.AddPath(tempDir); err != nil {
+	if err := registry.AddPath(tempDir, false); err != nil {
 		t.Fatalf("Failed to add path: %v", err)
 	}
 
