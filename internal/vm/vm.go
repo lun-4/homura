@@ -21,6 +21,7 @@ type VM struct {
 	StateDir      string        // Temporary state directory
 	Images        *ImagePaths
 	EphemeralDisk string        // Path to ephemeral rootfs disk
+	HostHomeDir   string        // Host user's home directory
 
 	// Passt networking fields
 	SlotNumber   int            // Sequential slot (1-254)
@@ -95,6 +96,18 @@ func NewVM() (*VM, error) {
 			ninepArgs = append(ninepArgs, spec.FormatPathArg())
 			slog.Info("Adding configured path", "path", spec.Path, "readonly", spec.ReadOnly)
 		}
+	}
+
+	// Auto-expose Claude config files (read-write to allow updates)
+	claudeJson := filepath.Join(homeDir, ".claude.json")
+	claudeDir := filepath.Join(homeDir, ".claude")
+	if _, err := os.Stat(claudeJson); err == nil {
+		ninepArgs = append(ninepArgs, claudeJson)
+		slog.Info("Auto-exposing Claude config", "path", claudeJson)
+	}
+	if _, err := os.Stat(claudeDir); err == nil {
+		ninepArgs = append(ninepArgs, claudeDir)
+		slog.Info("Auto-exposing Claude config", "path", claudeDir)
 	}
 
 	ninepCmd := exec.Command(ninepBinary, ninepArgs...)
@@ -192,6 +205,7 @@ func NewVM() (*VM, error) {
 		WorkDir:          workDir,
 		SSHPubPath:       sshPubPath,
 		StateDir:         stateDir,
+		HostHomeDir:      homeDir,
 		SlotNumber:       slot.SlotNumber,
 		IPAddress:        slot.IPAddress,
 		PortStart:        slot.PortStart,
@@ -260,6 +274,7 @@ func (vm *VM) Start() error {
 		NinePToken:       vm.NinePToken,
 		NinePControlPort: vm.NinePControlPort,
 		NinePPort:        vm.NinePPort,
+		HostHomeDir:      vm.HostHomeDir,
 	}
 
 	// Build QEMU command

@@ -16,6 +16,7 @@ type QEMUConfig struct {
 	NinePToken       string // 9p authentication token
 	NinePControlPort int    // 9p control port
 	NinePPort        int    // 9p listen port (auto-allocated)
+	HostHomeDir      string // Host user's home directory
 }
 
 // BuildQEMUArgs builds the argument list for launching QEMU with q35 machine
@@ -64,6 +65,11 @@ func buildKernelCmdline(cfg *QEMUConfig) string {
 	if cfg.NinePToken != "" {
 		cmdline += fmt.Sprintf(" p9.token=%s p9.port=%d p9.listenport=%d",
 			cfg.NinePToken, cfg.NinePControlPort, cfg.NinePPort)
+	}
+
+	// Add host home directory for Claude config symlinks
+	if cfg.HostHomeDir != "" {
+		cmdline += fmt.Sprintf(" host.home=%s", cfg.HostHomeDir)
 	}
 
 	return cmdline

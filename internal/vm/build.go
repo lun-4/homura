@@ -696,6 +696,21 @@ if grep -q "p9.token=" /proc/cmdline; then
     # Check if mounted
     if mountpoint -q /mnt/host; then
         echo "9p filesystem mounted at /mnt/host (FUSE) on port $P9_PORT"
+
+        # Symlink Claude config files if host.home is provided
+        HOST_HOME=$(grep -o 'host.home=[^ ]*' /proc/cmdline | cut -d= -f2)
+        if [ -n "$HOST_HOME" ]; then
+            # Symlink .claude.json
+            if [ -f "/mnt/host${HOST_HOME}/.claude.json" ]; then
+                ln -sf "/mnt/host${HOST_HOME}/.claude.json" /root/.claude.json
+                echo "Symlinked /root/.claude.json"
+            fi
+            # Symlink .claude directory
+            if [ -d "/mnt/host${HOST_HOME}/.claude" ]; then
+                ln -sf "/mnt/host${HOST_HOME}/.claude" /root/.claude
+                echo "Symlinked /root/.claude"
+            fi
+        fi
     else
         echo "Failed to mount 9p filesystem via FUSE"
     fi
