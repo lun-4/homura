@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -318,7 +319,7 @@ func benchmarkWrite(b *testing.B, size int) {
 
 	for i := 0; i < b.N; i++ {
 		path := filepath.Join(dir, fmt.Sprintf("write_%d.bin", i))
-		fid, _, err := client.Create(path, 0644, 0)
+		fid, _, err := client.Create(path, 0644, syscall.O_RDWR|syscall.O_CREAT)
 		if err != nil {
 			b.Fatalf("Create failed: %v", err)
 		}
@@ -358,7 +359,7 @@ func BenchmarkWrite_Sequential(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		path := filepath.Join(dir, fmt.Sprintf("seq_%d.bin", i))
-		fid, _, err := client.Create(path, 0644, 0)
+		fid, _, err := client.Create(path, 0644, syscall.O_RDWR|syscall.O_CREAT)
 		if err != nil {
 			b.Fatalf("Create failed: %v", err)
 		}
