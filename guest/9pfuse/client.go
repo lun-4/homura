@@ -25,14 +25,25 @@ type P9Client struct {
 
 // NewP9Client creates a new 9p client connection
 func NewP9Client(serverAddr string) (*P9Client, error) {
-	// Connect to 9passthrough server
-	conn, err := net.Dial("tcp", serverAddr)
+	// Connect to 9passthrough server with timeout
+	dialer := net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+	conn, err := dialer.Dial("tcp", serverAddr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to %s: %w", serverAddr, err)
 	}
 
-	// Create p9 client
-	client, err := p9.NewClient(conn, p9.WithMessageSize(8192))
+	// Set TCP keepalive to detect dead connections
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		tcpConn.SetKeepAlive(true)
+		tcpConn.SetKeepAlivePeriod(30 * time.Second)
+	}
+
+	// Create p9 client with larger message size for better throughput
+	// 64KB allows larger reads/writes and reduces round-trips
+	client, err := p9.NewClient(conn, p9.WithMessageSize(65536))
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("failed to create p9 client: %w", err)
@@ -77,14 +88,12 @@ func (c *P9Client) allocateFID() uint32 {
 }
 
 // Walk walks to a path and returns a file handle
+// Note: This is safe to call concurrently - the p9 library handles tag multiplexing
 func (c *P9Client) Walk(path string) (p9.File, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	// Parse path into components
 	names := parsePath(path)
 
-	// Walk from root
+	// Walk from root - p9.File.Walk is thread-safe (creates a new fid via clone)
 	_, file, err := c.root.Walk(names)
 	if err != nil {
 		return nil, fmt.Errorf("walk failed for %s: %w", path, err)
@@ -95,26 +104,25 @@ func (c *P9Client) Walk(path string) (p9.File, error) {
 
 // Open opens a file for reading/writing
 func (c *P9Client) Open(path string, mode p9.OpenFlags) (uint32, p9.File, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Walk to file
+	// Walk to file - no lock needed, p9 is thread-safe
 	names := parsePath(path)
 	_, file, err := c.root.Walk(names)
 	if err != nil {
 		return 0, nil, fmt.Errorf("walk failed for %s: %w", path, err)
 	}
 
-	// Open the file
+	// Open the file - no lock needed
 	_, _, err = file.Open(mode)
 	if err != nil {
 		file.Close()
 		return 0, nil, fmt.Errorf("open failed for %s: %w", path, err)
 	}
 
-	// Allocate FID and cache
+	// Allocate FID and cache - only this part needs the lock
+	c.mu.Lock()
 	fid := c.allocateFID()
 	c.files[fid] = file
+	c.mu.Unlock()
 
 	return fid, file, nil
 }
@@ -189,10 +197,7 @@ func (c *P9Client) WriteAt(fid uint32, data []byte, offset uint64) (int, error) 
 
 // Readlink reads the target of a symbolic link
 func (c *P9Client) Readlink(path string) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Walk to the symlink
+	// Walk to the symlink - no lock needed
 	names := parsePath(path)
 	_, file, err := c.root.Walk(names)
 	if err != nil {
@@ -245,14 +250,11 @@ func (c *P9Client) Readdir(path string) ([]p9.Dirent, error) {
 
 // Create creates a new file
 func (c *P9Client) Create(path string, mode p9.FileMode, flags uint32) (uint32, p9.QID, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	// Get parent directory
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
 
-	// Walk to parent
+	// Walk to parent - no lock needed
 	names := parsePath(dir)
 	_, parent, err := c.root.Walk(names)
 	if err != nil {
@@ -262,7 +264,7 @@ func (c *P9Client) Create(path string, mode p9.FileMode, flags uint32) (uint32, 
 	// After Create() is called, parent BECOMES the created file handle.
 	// We need to keep it open for writes.
 
-	// Create file
+	// Create file - no lock needed
 	p9Flags := flagsToP9Create(flags)
 	createdFile, qid, _, err := parent.Create(base, p9Flags, mode.Permissions(), p9.UID(0), p9.GID(0))
 	if err != nil {
@@ -270,10 +272,11 @@ func (c *P9Client) Create(path string, mode p9.FileMode, flags uint32) (uint32, 
 		return 0, p9.QID{}, fmt.Errorf("create %s failed: %w", path, err)
 	}
 
-	// Allocate FID and store the created file
-	// Note: createdFile is actually the parent file handle, which now represents the created file
+	// Allocate FID and store the created file - only this part needs the lock
+	c.mu.Lock()
 	fid := c.allocateFID()
 	c.files[fid] = createdFile
+	c.mu.Unlock()
 
 	return fid, qid, nil
 }
@@ -297,14 +300,11 @@ func flagsToP9Create(flags uint32) p9.OpenFlags {
 
 // Mkdir creates a new directory
 func (c *P9Client) Mkdir(path string, mode p9.FileMode) (p9.QID, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	// Get parent directory
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
 
-	// Walk to parent
+	// Walk to parent - no lock needed
 	names := parsePath(dir)
 	_, parent, err := c.root.Walk(names)
 	if err != nil {
@@ -323,14 +323,11 @@ func (c *P9Client) Mkdir(path string, mode p9.FileMode) (p9.QID, error) {
 
 // Unlink removes a file or directory
 func (c *P9Client) Unlink(path string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	// Get parent directory
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
 
-	// Walk to parent
+	// Walk to parent - no lock needed
 	names := parsePath(dir)
 	_, parent, err := c.root.Walk(names)
 	if err != nil {
@@ -348,9 +345,6 @@ func (c *P9Client) Unlink(path string) error {
 
 // Rename renames/moves a file
 func (c *P9Client) Rename(oldPath, newPath string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	// Get old parent
 	oldDir := filepath.Dir(oldPath)
 	oldBase := filepath.Base(oldPath)
@@ -359,7 +353,7 @@ func (c *P9Client) Rename(oldPath, newPath string) error {
 	newDir := filepath.Dir(newPath)
 	newBase := filepath.Base(newPath)
 
-	// Walk to old parent
+	// Walk to old parent - no lock needed
 	oldNames := parsePath(oldDir)
 	_, oldParent, err := c.root.Walk(oldNames)
 	if err != nil {
@@ -367,7 +361,7 @@ func (c *P9Client) Rename(oldPath, newPath string) error {
 	}
 	defer oldParent.Close()
 
-	// Walk to new parent
+	// Walk to new parent - no lock needed
 	newNames := parsePath(newDir)
 	_, newParent, err := c.root.Walk(newNames)
 	if err != nil {
@@ -450,14 +444,11 @@ func (c *P9Client) Utimens(path string, atime, mtime time.Time) error {
 
 // Symlink creates a symbolic link
 func (c *P9Client) Symlink(linkPath, target string) (p9.QID, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	// Get parent directory
 	dir := filepath.Dir(linkPath)
 	base := filepath.Base(linkPath)
 
-	// Walk to parent
+	// Walk to parent - no lock needed
 	names := parsePath(dir)
 	_, parent, err := c.root.Walk(names)
 	if err != nil {
@@ -476,14 +467,11 @@ func (c *P9Client) Symlink(linkPath, target string) (p9.QID, error) {
 
 // Link creates a hard link
 func (c *P9Client) Link(linkPath, targetPath string) (p9.QID, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	// Get parent directory of link
 	dir := filepath.Dir(linkPath)
 	base := filepath.Base(linkPath)
 
-	// Walk to link parent
+	// Walk to link parent - no lock needed
 	names := parsePath(dir)
 	_, parent, err := c.root.Walk(names)
 	if err != nil {
@@ -491,7 +479,7 @@ func (c *P9Client) Link(linkPath, targetPath string) (p9.QID, error) {
 	}
 	defer parent.Close()
 
-	// Walk to target file
+	// Walk to target file - no lock needed
 	targetNames := parsePath(targetPath)
 	_, target, err := c.root.Walk(targetNames)
 	if err != nil {
