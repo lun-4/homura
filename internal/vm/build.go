@@ -1,10 +1,10 @@
 package vm
 
 import (
-	_ "embed"
 	"compress/gzip"
 	"crypto/md5"
 	"crypto/sha256"
+	_ "embed"
 	"fmt"
 	"io"
 	"log/slog"
@@ -32,13 +32,13 @@ var builtinClaudeMd string
 
 // ImagePaths holds paths to all VM images
 type ImagePaths struct {
-	CacheDir          string
-	KernelPath        string
-	InitramfsPath     string
-	ModloopPath       string
-	RootfsPath        string
-	SSHHostKeysDir    string
-	EphemeralRootfs   string
+	CacheDir        string
+	KernelPath      string
+	InitramfsPath   string
+	ModloopPath     string
+	RootfsPath      string
+	SSHHostKeysDir  string
+	EphemeralRootfs string
 }
 
 // EnsureImages downloads and builds all required VM images
@@ -61,12 +61,12 @@ func EnsureImages(sshPubKeyPath string) (*ImagePaths, error) {
 	rootfsFilename := "rootfs.ext4"
 
 	paths := &ImagePaths{
-		CacheDir:        cacheDir,
-		KernelPath:      filepath.Join(cacheDir, "vmlinuz-virt"),
-		InitramfsPath:   filepath.Join(cacheDir, "initramfs-virt"),
-		ModloopPath:     filepath.Join(cacheDir, "modloop-virt"),
-		RootfsPath:      filepath.Join(cacheDir, rootfsFilename),
-		SSHHostKeysDir:  sshKeysDir,
+		CacheDir:       cacheDir,
+		KernelPath:     filepath.Join(cacheDir, "vmlinuz-virt"),
+		InitramfsPath:  filepath.Join(cacheDir, "initramfs-virt"),
+		ModloopPath:    filepath.Join(cacheDir, "modloop-virt"),
+		RootfsPath:     filepath.Join(cacheDir, rootfsFilename),
+		SSHHostKeysDir: sshKeysDir,
 	}
 
 	// Download Alpine components if needed
@@ -416,6 +416,28 @@ func buildInitramfs(paths *ImagePaths) error {
 	return nil
 }
 
+// cleanupStaleContainers removes any leftover homura containers from previous failed builds
+func cleanupStaleContainers(dockerCmd string) {
+	// List all containers (running and stopped) with names starting with "homura-temp-"
+	cmd := exec.Command(dockerCmd, "ps", "-a", "--filter", "name=homura-temp-", "--format", "{{.Names}}")
+	output, err := cmd.Output()
+	if err != nil {
+		return // Ignore errors, this is best-effort cleanup
+	}
+
+	containers := strings.Split(strings.TrimSpace(string(output)), "\n")
+	for _, container := range containers {
+		container = strings.TrimSpace(container)
+		if container == "" {
+			continue
+		}
+		slog.Info("Cleaning up stale container from previous build", "container", container)
+		// Force remove in case it's still running
+		rmCmd := exec.Command(dockerCmd, "rm", "-f", container)
+		rmCmd.Run() // Ignore errors
+	}
+}
+
 // buildRootfs creates an ext4 rootfs image using Docker and fuse2fs
 func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 	slog.Info("Building rootfs image")
@@ -432,6 +454,9 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 		dockerCmd = "podman"
 	}
 
+	// Clean up any stale containers from previous failed builds
+	cleanupStaleContainers(dockerCmd)
+
 	// Check if base image already exists
 	baseImageName := fmt.Sprintf("homura-vm-alpine-base:v%d", VMImplementationVersion)
 	baseImageExists := false
@@ -443,7 +468,10 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 	// Get base image ID (or placeholder if image doesn't exist yet)
 	var baseImageID string
 	if baseImageExists {
-		baseImageID, _ = getImageID(dockerCmd, baseImageName)
+		baseImageID, err = getImageID(dockerCmd, baseImageName)
+		if err != nil {
+			return fmt.Errorf("failed to get docker image id: %w", err)
+		}
 	}
 
 	// Determine final rootfs filename and image name BEFORE checking if rootfs exists
@@ -615,7 +643,7 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("docker create failed: %w", err)
 	}
-	defer exec.Command(dockerCmd, "rm", containerName).Run()
+	defer exec.Command(dockerCmd, "rm", "-f", containerName).Run() // Force remove to handle stuck containers
 
 	tarFile, err := os.Create(tarPath)
 	if err != nil {

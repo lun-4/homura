@@ -30,9 +30,9 @@ func (vr *VirtualRoot) Attach() (p9.File, error) {
 
 // VirtualFile implements p9.File with path filtering
 type VirtualFile struct {
-	path         string
-	registry     *PathRegistry
-	realFile     *os.File // For opened files
+	path           string
+	registry       *PathRegistry
+	realFile       *os.File // For opened files
 	openedReadOnly bool     // Track if file was opened read-only
 }
 
