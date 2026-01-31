@@ -21,4 +21,4 @@ package vm
 // 9 - Increase RAM to 4GB, add 1GB swap file on boot
 // 10 - Fix race condition: wait for 9pfuse to serve claude config before symlinking
 // 11 - Fix claude code temp files so that symlink actually works
-const VMImplementationVersion = 12
+const VMImplementationVersion = 14

@@ -98,6 +98,11 @@ func (n *NinePNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.Attr
 
 // Open opens a file
 func (n *NinePNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
+	// Invalidate cache if opening for write (file may be modified)
+	if flags&(syscall.O_WRONLY|syscall.O_RDWR|syscall.O_TRUNC|syscall.O_APPEND) != 0 {
+		n.client.attrCache.Invalidate(n.path)
+	}
+
 	// Convert flags to p9 OpenFlags
 	p9Flags := flagsToP9(flags)
 
@@ -114,8 +119,13 @@ func (n *NinePNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint
 		fid:    fid,
 	}
 
-	// Return with FOPEN_KEEP_CACHE to enable caching
-	return fh, fuse.FOPEN_KEEP_CACHE, 0
+	// Only use FOPEN_KEEP_CACHE for read-only opens
+	// Write opens must not keep cache or kernel will serve stale data
+	var fuseFlags uint32
+	if flags&(syscall.O_WRONLY|syscall.O_RDWR|syscall.O_TRUNC|syscall.O_APPEND) == 0 {
+		fuseFlags = fuse.FOPEN_KEEP_CACHE
+	}
+	return fh, fuseFlags, 0
 }
 
 // Readlink reads the target of a symbolic link
@@ -134,6 +144,9 @@ func (n *NinePNode) Create(ctx context.Context, name string, flags uint32, mode 
 	if n.path == "/" {
 		childPath = "/" + name
 	}
+
+	// Invalidate parent dir cache (new entry added)
+	n.client.attrCache.Invalidate(n.path)
 
 	// Create the file via 9p
 	fid, _, err := n.client.Create(childPath, p9.FileMode(mode), flags)
@@ -161,10 +174,11 @@ func (n *NinePNode) Create(ctx context.Context, name string, flags uint32, mode 
 	out.SetEntryTimeout(0)
 	out.SetAttrTimeout(0)
 
+	// Don't use FOPEN_KEEP_CACHE for newly created files (will be written to)
 	return n.Inode.NewInode(ctx, child, fs.StableAttr{
 		Mode: mode,
 		Ino:  0,
-	}), fh, fuse.FOPEN_KEEP_CACHE, 0
+	}), fh, 0, 0
 }
 
 // Mkdir creates a new directory
@@ -206,6 +220,10 @@ func (n *NinePNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		childPath = "/" + name
 	}
 
+	// Invalidate cache entries
+	n.client.attrCache.Invalidate(childPath)
+	n.client.attrCache.Invalidate(n.path)
+
 	if err := n.client.Unlink(childPath); err != nil {
 		log.Printf("Unlink failed for %s: %v", childPath, err)
 		return syscall.EIO
@@ -220,6 +238,10 @@ func (n *NinePNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 	if n.path == "/" {
 		childPath = "/" + name
 	}
+
+	// Invalidate cache entries
+	n.client.attrCache.Invalidate(childPath)
+	n.client.attrCache.Invalidate(n.path)
 
 	if err := n.client.Unlink(childPath); err != nil {
 		log.Printf("Rmdir failed for %s: %v", childPath, err)
@@ -260,6 +282,9 @@ func (n *NinePNode) Rename(ctx context.Context, name string, newParent fs.InodeE
 
 // Setattr changes file attributes
 func (n *NinePNode) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+	// Invalidate cache - attributes are being modified
+	n.client.attrCache.Invalidate(n.path)
+
 	// Handle truncate
 	if in.Valid&fuse.FATTR_SIZE != 0 {
 		if err := n.client.Truncate(n.path, in.Size); err != nil {
@@ -456,6 +481,10 @@ func (fh *NinePFileHandle) Read(ctx context.Context, dest []byte, offset int64) 
 // Write writes to the file
 func (fh *NinePFileHandle) Write(ctx context.Context, data []byte, offset int64) (uint32, syscall.Errno) {
 	log.Printf("Write called: path=%s, fid=%d, offset=%d, len=%d", fh.path, fh.fid, offset, len(data))
+
+	// Invalidate cache - file size/mtime will change
+	fh.client.attrCache.Invalidate(fh.path)
+
 	n, err := fh.client.WriteAt(fh.fid, data, uint64(offset))
 	if err != nil {
 		log.Printf("Write FAILED for %s (fid=%d) at offset %d, len=%d: %v", fh.path, fh.fid, offset, len(data), err)
