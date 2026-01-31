@@ -761,6 +761,28 @@ fi
 		return fmt.Errorf("failed to write 9p mount script: %w", err)
 	}
 
+	// Create swap file setup script
+	swapScript := `#!/bin/sh
+# Create and enable swap file on boot
+SWAPFILE=/var/swap
+SWAPSIZE=1G
+
+# Only create if it doesn't exist
+if [ ! -f "$SWAPFILE" ]; then
+    echo "Creating ${SWAPSIZE} swap file..."
+    dd if=/dev/zero of="$SWAPFILE" bs=1M count=1024
+    chmod 600 "$SWAPFILE"
+    mkswap "$SWAPFILE"
+fi
+
+# Enable swap
+swapon "$SWAPFILE" 2>/dev/null && echo "Swap enabled: $SWAPFILE"
+`
+	swapScriptPath := filepath.Join(localDDir, "swap.start")
+	if err := os.WriteFile(swapScriptPath, []byte(swapScript), 0755); err != nil {
+		return fmt.Errorf("failed to write swap script: %w", err)
+	}
+
 	// Write builtin CLAUDE.md for VM
 	claudeConfigDir := filepath.Join(mountDir, "etc", "homura", "claude-config")
 	if err := os.MkdirAll(claudeConfigDir, 0755); err != nil {

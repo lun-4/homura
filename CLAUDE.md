@@ -264,3 +264,7 @@ Track changes in `internal/vm/version.go` comments:
 // 1 - Initial implementation with passt networking
 // 2 - Added vim to base image (example)
 ```
+
+## testing
+
+Run `make test`.

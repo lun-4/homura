@@ -18,4 +18,5 @@ package vm
 // 6 - Add test-fs filesystem validation tool
 // 7 - Auto-symlink host Claude config (~/.claude.json, ~/.claude/) into VM
 // 8 - Add VM-specific CLAUDE.md injection via /etc/homura/claude-config
-const VMImplementationVersion = 8
+// 9 - Increase RAM to 4GB, add 1GB swap file on boot
+const VMImplementationVersion = 9

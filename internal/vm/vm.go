@@ -290,7 +290,7 @@ func (vm *VM) Start() error {
 		KernelPath:       images.KernelPath,
 		InitrdPath:       images.InitramfsPath,
 		RootfsPath:       ephemeralDisk,
-		Memory:           2048, // 2GB
+		Memory:           4096, // 4GB
 		CPUs:             4,
 		PasstSocket:      vm.PasstManager.SocketPath,
 		NinePToken:       vm.NinePToken,
