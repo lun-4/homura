@@ -31,6 +31,7 @@ build:
 
 test:
 	cd 9passthrough && go test -v -count=1 .
+	cd guest/9pfuse && go test -v -count=1 .
 
 clean:
 	rm -vf homura

@@ -457,7 +457,8 @@ func (c *P9Client) Symlink(linkPath, target string) (p9.QID, error) {
 	defer parent.Close()
 
 	// Create symlink
-	qid, err := parent.Symlink(base, target, p9.UID(0), p9.GID(0))
+	// parent.Symlink(oldname, newname) - oldname is target, newname is link name
+	qid, err := parent.Symlink(target, base, p9.UID(0), p9.GID(0))
 	if err != nil {
 		return p9.QID{}, fmt.Errorf("symlink %s -> %s failed: %w", linkPath, target, err)
 	}
