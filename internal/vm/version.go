@@ -21,4 +21,9 @@ package vm
 // 9 - Increase RAM to 4GB, add 1GB swap file on boot
 // 10 - Fix race condition: wait for 9pfuse to serve claude config before symlinking
 // 11 - Fix claude code temp files so that symlink actually works
-const VMImplementationVersion = 14
+// ...
+// 15 - Remove rc_sys="lxc" to fix sysfs/procfs/hostname not starting at boot
+// 16 - Force rc_sys="", remove Docker markers, disable TTY getty spam
+// 17 - Add backup hostname setting in 9pmount.start script
+// 18 - Write /etc/hostname directly in build.go (Docker export loses it)
+const VMImplementationVersion = 18

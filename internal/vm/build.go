@@ -701,6 +701,12 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 		slog.Warn("Failed to write hosts", "error", err)
 	}
 
+	// Set hostname (Docker export sometimes loses this)
+	hostnamePath := filepath.Join(mountDir, "etc", "hostname")
+	if err := os.WriteFile(hostnamePath, []byte("homura-vm\n"), 0644); err != nil {
+		slog.Warn("Failed to write hostname", "error", err)
+	}
+
 	// Create 9p auto-mount script using FUSE
 	ninepScript := `#!/bin/sh
 # Auto-mount 9p filesystem via FUSE if kernel params present
@@ -708,6 +714,9 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 # Log all output to file
 exec >> /var/log/9pmount.log 2>&1
 echo "=== 9pmount.start running at $(date) ==="
+
+# Ensure hostname is set (backup in case hostname service didn't run)
+hostname -F /etc/hostname 2>/dev/null || hostname homura-vm
 
 if grep -q "p9.token=" /proc/cmdline; then
     mkdir -p /mnt/host
