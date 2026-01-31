@@ -230,6 +230,7 @@ Increment `VMImplementationVersion` in `internal/vm/version.go` when:
    - New system packages
    - New kernel parameters
    - Changed QEMU configuration that affects guest behavior
+   - Changing core homura vm binaries: 9pvm-request, test-fs, 9pfuse
 
 #### When NOT to Bump the Version
 

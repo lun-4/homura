@@ -13,7 +13,7 @@ build:
 	cd 9pvm-request && CGO_ENABLED=0 go build -o ~/.cache/homura/bin/9pvm-request .
 	cd guest/9pfuse && CGO_ENABLED=0 go build -o ~/.cache/homura/bin/9pfuse .
 	cd guest/9pfuse/cmd/stress && CGO_ENABLED=0 go build -o ~/.cache/homura/bin/9pfuse-stress .
-	cd test-fs && go build -o ~/.cache/homura/bin/test-fs .
+	cd test-fs && CGO_ENABLED=0 go build -o ~/.cache/homura/bin/test-fs .
 	@rm -rf ~/.cache/homura/src/9pvm-request
 	@rm -rf ~/.cache/homura/src/9pfuse
 	@rm -rf ~/.cache/homura/src/test-fs
