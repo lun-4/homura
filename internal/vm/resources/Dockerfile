@@ -38,11 +38,12 @@ RUN rm -rv ~/.claude
 RUN rm -v ~/.claude.json
 RUN rm -v ~/.claude.json.backup
 
-# OpenRC needs this for containers/VMs without real hardware clock
-RUN sed -i 's/^#rc_sys=.*/rc_sys="lxc"/' /etc/rc.conf
+# Force OpenRC to run in default mode (not container mode)
+# The rootfs is built in Docker, so /.dockerenv exists and OpenRC would detect [DOCKER]
+RUN sed -i 's/^#rc_sys=.*/rc_sys=""/' /etc/rc.conf
 
-# Ensure ttys are available for login
-RUN sed -i 's/^#rc_tty_number=.*/rc_tty_number=0/' /etc/rc.conf
+# Disable all TTYs - we use SSH only, no console login needed
+RUN sed -i '/^tty[0-9]/d' /etc/inittab
 
 # Add ~/.local/bin to PATH for all shells
 RUN echo 'export PATH="$HOME/.local/bin:$PATH"' >> /etc/profile

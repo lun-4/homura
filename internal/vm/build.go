@@ -685,6 +685,10 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 		return fmt.Errorf("tar extract failed: %w", err)
 	}
 
+	// Remove Docker/container markers so OpenRC doesn't detect container mode
+	os.Remove(filepath.Join(mountDir, ".dockerenv"))
+	os.RemoveAll(filepath.Join(mountDir, "run", ".containerenv"))
+
 	// Add DNS config
 	resolvPath := filepath.Join(mountDir, "etc", "resolv.conf")
 	if err := os.WriteFile(resolvPath, []byte("nameserver 1.1.1.1\nnameserver 8.8.8.8\n"), 0644); err != nil {
