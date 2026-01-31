@@ -45,6 +45,9 @@ var _ fs.NodeStatfser = (*NinePNode)(nil)
 
 // Lookup looks up a child entry
 func (n *NinePNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	span := StartSpan("fuse.Lookup")
+	defer span.End()
+
 	childPath := n.path + "/" + name
 	if n.path == "/" {
 		childPath = "/" + name
@@ -80,6 +83,9 @@ func (n *NinePNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 
 // Getattr gets file attributes
 func (n *NinePNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	span := StartSpan("fuse.Getattr")
+	defer span.End()
+
 	_, attr, err := n.client.GetAttr(n.path)
 	if err != nil {
 		log.Printf("Getattr failed for %s: %v", n.path, err)
@@ -389,6 +395,9 @@ func (n *NinePNode) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Err
 
 // Readdir reads directory entries
 func (n *NinePNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	span := StartSpan("fuse.Readdir")
+	defer span.End()
+
 	entries, err := n.client.Readdir(n.path)
 	if err != nil {
 		log.Printf("Readdir failed for %s: %v", n.path, err)
@@ -403,9 +412,10 @@ func (n *NinePNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		}
 
 		mode := uint32(syscall.S_IFREG | 0644) // Default to regular file
-		if e.Type == p9.TypeDir {
+		switch e.Type {
+		case p9.TypeDir:
 			mode = uint32(syscall.S_IFDIR | 0755)
-		} else if e.Type == p9.TypeSymlink {
+		case p9.TypeSymlink:
 			mode = uint32(syscall.S_IFLNK | 0777)
 		}
 

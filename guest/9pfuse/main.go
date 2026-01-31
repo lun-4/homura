@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
@@ -18,7 +20,44 @@ func main() {
 	// Parse flags
 	serverAddr := flag.String("server", defaultServerAddr, "9p server address")
 	mountpoint := flag.String("mount", defaultMountpoint, "FUSE mount point")
+	pprofAddr := flag.String("pprof", "", "pprof HTTP address (e.g., :6060)")
+	tracing := flag.Bool("trace", false, "enable operation tracing")
 	flag.Parse()
+
+	// Enable tracing if requested
+	if *tracing {
+		EnableTracing(true)
+		log.Printf("Tracing enabled - send SIGUSR1 to dump stats, SIGUSR2 to reset")
+	}
+
+	// Start pprof server if requested
+	if *pprofAddr != "" {
+		go func() {
+			log.Printf("Starting pprof server on %s", *pprofAddr)
+			if err := http.ListenAndServe(*pprofAddr, nil); err != nil {
+				log.Printf("pprof server error: %v", err)
+			}
+		}()
+	}
+
+	// Handle SIGUSR1 to dump trace stats
+	usr1Chan := make(chan os.Signal, 1)
+	signal.Notify(usr1Chan, syscall.SIGUSR1)
+	go func() {
+		for range usr1Chan {
+			DumpStats()
+		}
+	}()
+
+	// Handle SIGUSR2 to reset stats
+	usr2Chan := make(chan os.Signal, 1)
+	signal.Notify(usr2Chan, syscall.SIGUSR2)
+	go func() {
+		for range usr2Chan {
+			ResetStats()
+			log.Println("Trace stats reset")
+		}
+	}()
 
 	// Setup logging to file
 	logFile, err := os.OpenFile("/tmp/9pfuse.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)

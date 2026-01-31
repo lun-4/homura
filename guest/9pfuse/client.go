@@ -21,6 +21,9 @@ type P9Client struct {
 	// File handle cache (fid -> file)
 	files   map[uint32]p9.File
 	nextFID uint32
+
+	// Attribute cache for reducing round-trips
+	attrCache *AttrCache
 }
 
 // NewP9Client creates a new 9p client connection
@@ -58,11 +61,12 @@ func NewP9Client(serverAddr string) (*P9Client, error) {
 	}
 
 	return &P9Client{
-		conn:    conn,
-		client:  client,
-		root:    root,
-		files:   make(map[uint32]p9.File),
-		nextFID: 1,
+		conn:      conn,
+		client:    client,
+		root:      root,
+		files:     make(map[uint32]p9.File),
+		nextFID:   1,
+		attrCache: NewAttrCache(100 * time.Millisecond), // Short TTL for consistency
 	}, nil
 }
 
@@ -90,6 +94,9 @@ func (c *P9Client) allocateFID() uint32 {
 // Walk walks to a path and returns a file handle
 // Note: This is safe to call concurrently - the p9 library handles tag multiplexing
 func (c *P9Client) Walk(path string) (p9.File, error) {
+	span := StartSpan("9p.Walk")
+	defer span.End()
+
 	// Parse path into components
 	names := parsePath(path)
 
@@ -150,14 +157,24 @@ func (c *P9Client) CloseFID(fid uint32) error {
 	return file.Close()
 }
 
-// GetAttr gets file attributes
+// GetAttr gets file attributes (checks cache first)
 func (c *P9Client) GetAttr(path string) (p9.QID, p9.Attr, error) {
+	span := StartSpan("9p.GetAttr")
+	defer span.End()
+
+	// Check cache first
+	if qid, attr, ok := c.attrCache.Get(path); ok {
+		TraceOp("9p.GetAttr.CacheHit", span.start)
+		return qid, attr, nil
+	}
+
 	file, err := c.Walk(path)
 	if err != nil {
 		return p9.QID{}, p9.Attr{}, err
 	}
 	defer file.Close()
 
+	getAttrSpan := StartSpan("9p.GetAttr.RPC")
 	qid, _, attr, err := file.GetAttr(p9.AttrMask{
 		Mode:  true,
 		Size:  true,
@@ -165,6 +182,11 @@ func (c *P9Client) GetAttr(path string) (p9.QID, p9.Attr, error) {
 		MTime: true,
 		CTime: true,
 	})
+	getAttrSpan.End()
+
+	if err == nil {
+		c.attrCache.Put(path, qid, attr)
+	}
 
 	return qid, attr, err
 }
@@ -214,8 +236,11 @@ func (c *P9Client) Readlink(path string) (string, error) {
 	return target, nil
 }
 
-// Readdir reads directory entries
+// Readdir reads directory entries and prefetches their attributes
 func (c *P9Client) Readdir(path string) ([]p9.Dirent, error) {
+	span := StartSpan("9p.Readdir")
+	defer span.End()
+
 	file, err := c.Walk(path)
 	if err != nil {
 		return nil, err
@@ -223,7 +248,9 @@ func (c *P9Client) Readdir(path string) ([]p9.Dirent, error) {
 	defer file.Close()
 
 	// Open directory
+	openSpan := StartSpan("9p.Readdir.Open")
 	_, _, err = file.Open(p9.ReadOnly)
+	openSpan.End()
 	if err != nil {
 		return nil, fmt.Errorf("failed to open directory %s: %w", path, err)
 	}
@@ -233,7 +260,9 @@ func (c *P9Client) Readdir(path string) ([]p9.Dirent, error) {
 	offset := uint64(0)
 
 	for {
+		readSpan := StartSpan("9p.Readdir.Read")
 		dirents, err := file.Readdir(offset, 8192)
+		readSpan.End()
 		if err != nil {
 			return nil, err
 		}
@@ -245,11 +274,73 @@ func (c *P9Client) Readdir(path string) ([]p9.Dirent, error) {
 		offset += uint64(len(dirents))
 	}
 
+	// Prefetch attributes for all entries (key optimization for READDIRPLUS)
+	if len(entries) > 0 {
+		prefetchSpan := StartSpan("9p.Readdir.Prefetch")
+		c.prefetchAttrs(path, entries)
+		prefetchSpan.End()
+	}
+
 	return entries, nil
+}
+
+// prefetchAttrs fetches attributes for all directory entries and caches them
+func (c *P9Client) prefetchAttrs(parentPath string, entries []p9.Dirent) {
+	// Use a semaphore to limit concurrent requests
+	const maxConcurrent = 8
+	sem := make(chan struct{}, maxConcurrent)
+	var wg sync.WaitGroup
+
+	for _, entry := range entries {
+		if entry.Name == "." || entry.Name == ".." {
+			continue
+		}
+
+		childPath := parentPath + "/" + entry.Name
+		if parentPath == "/" {
+			childPath = "/" + entry.Name
+		}
+
+		// Skip if already cached
+		if _, _, ok := c.attrCache.Get(childPath); ok {
+			continue
+		}
+
+		wg.Add(1)
+		sem <- struct{}{} // Acquire semaphore
+
+		go func(path string) {
+			defer wg.Done()
+			defer func() { <-sem }() // Release semaphore
+
+			// Walk and get attrs
+			file, err := c.Walk(path)
+			if err != nil {
+				return
+			}
+			defer file.Close()
+
+			qid, _, attr, err := file.GetAttr(p9.AttrMask{
+				Mode:  true,
+				Size:  true,
+				ATime: true,
+				MTime: true,
+				CTime: true,
+			})
+			if err == nil {
+				c.attrCache.Put(path, qid, attr)
+			}
+		}(childPath)
+	}
+
+	wg.Wait()
 }
 
 // Create creates a new file
 func (c *P9Client) Create(path string, mode p9.FileMode, flags uint32) (uint32, p9.QID, error) {
+	// Invalidate parent dir cache (new entry added)
+	c.attrCache.Invalidate(filepath.Dir(path))
+
 	// Get parent directory
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
@@ -300,6 +391,9 @@ func flagsToP9Create(flags uint32) p9.OpenFlags {
 
 // Mkdir creates a new directory
 func (c *P9Client) Mkdir(path string, mode p9.FileMode) (p9.QID, error) {
+	// Invalidate parent dir cache
+	c.attrCache.Invalidate(filepath.Dir(path))
+
 	// Get parent directory
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
@@ -323,6 +417,10 @@ func (c *P9Client) Mkdir(path string, mode p9.FileMode) (p9.QID, error) {
 
 // Unlink removes a file or directory
 func (c *P9Client) Unlink(path string) error {
+	// Invalidate cache entries
+	c.attrCache.Invalidate(path)
+	c.attrCache.Invalidate(filepath.Dir(path))
+
 	// Get parent directory
 	dir := filepath.Dir(path)
 	base := filepath.Base(path)
@@ -345,6 +443,12 @@ func (c *P9Client) Unlink(path string) error {
 
 // Rename renames/moves a file
 func (c *P9Client) Rename(oldPath, newPath string) error {
+	// Invalidate all affected cache entries
+	c.attrCache.Invalidate(oldPath)
+	c.attrCache.Invalidate(newPath)
+	c.attrCache.Invalidate(filepath.Dir(oldPath))
+	c.attrCache.Invalidate(filepath.Dir(newPath))
+
 	// Get old parent
 	oldDir := filepath.Dir(oldPath)
 	oldBase := filepath.Base(oldPath)
@@ -379,6 +483,8 @@ func (c *P9Client) Rename(oldPath, newPath string) error {
 
 // Truncate truncates a file to a specific size
 func (c *P9Client) Truncate(path string, size uint64) error {
+	c.attrCache.Invalidate(path) // Size changed
+
 	file, err := c.Walk(path)
 	if err != nil {
 		return err
@@ -391,6 +497,8 @@ func (c *P9Client) Truncate(path string, size uint64) error {
 
 // Chmod changes file permissions
 func (c *P9Client) Chmod(path string, mode p9.FileMode) error {
+	c.attrCache.Invalidate(path)
+
 	file, err := c.Walk(path)
 	if err != nil {
 		return err
