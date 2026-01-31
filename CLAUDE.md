@@ -151,6 +151,27 @@ homura 9p req deny <id>       # Deny a VM request
 - VM path requests require host approval
 - Full read/write access to exposed paths
 
+## VM Boot Scripts
+
+The VM uses OpenRC's `local` service to run scripts at boot. Scripts are located in `/etc/local.d/` and log to `/var/log/`.
+
+### Scripts
+
+| Script | Log File | Purpose |
+|--------|----------|---------|
+| `9pmount.start` | `/var/log/9pmount.log` | Mounts 9p FUSE filesystem at `/mnt/host`, symlinks `~/.claude` and `~/.claude.json` from host |
+| `swap.start` | `/var/log/swap.log` | Creates and enables 1GB swap file at `/var/swap` |
+
+### Debugging Boot Issues
+
+```bash
+# Inside VM, check boot script logs:
+cat /var/log/9pmount.log
+cat /var/log/swap.log
+```
+
+The scripts are generated in `internal/vm/build.go` during rootfs creation.
+
 ## Architecture
 
 ### State Management

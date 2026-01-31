@@ -19,4 +19,6 @@ package vm
 // 7 - Auto-symlink host Claude config (~/.claude.json, ~/.claude/) into VM
 // 8 - Add VM-specific CLAUDE.md injection via /etc/homura/claude-config
 // 9 - Increase RAM to 4GB, add 1GB swap file on boot
-const VMImplementationVersion = 9
+// 10 - Fix race condition: wait for 9pfuse to serve claude config before symlinking
+// 11 - Fix claude code temp files so that symlink actually works
+const VMImplementationVersion = 11

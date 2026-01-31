@@ -700,6 +700,11 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 	// Create 9p auto-mount script using FUSE
 	ninepScript := `#!/bin/sh
 # Auto-mount 9p filesystem via FUSE if kernel params present
+
+# Log all output to file
+exec >> /var/log/9pmount.log 2>&1
+echo "=== 9pmount.start running at $(date) ==="
+
 if grep -q "p9.token=" /proc/cmdline; then
     mkdir -p /mnt/host
 
@@ -725,15 +730,39 @@ if grep -q "p9.token=" /proc/cmdline; then
 
         # Symlink Claude config files if host.home is provided
         HOST_HOME=$(grep -o 'host.home=[^ ]*' /proc/cmdline | cut -d= -f2)
+        echo "HOST_HOME='$HOST_HOME'"
         if [ -n "$HOST_HOME" ]; then
+            # Wait for 9pfuse to be ready to serve paths (retry up to 5 times)
+            CLAUDE_DIR="/mnt/host${HOST_HOME}/.claude"
+            CLAUDE_JSON="/mnt/host${HOST_HOME}/.claude.json"
+            echo "Looking for CLAUDE_DIR='$CLAUDE_DIR' CLAUDE_JSON='$CLAUDE_JSON'"
+            RETRY=0
+            while [ $RETRY -lt 5 ]; do
+                # Check if at least one claude config exists, break if found
+                if [ -d "$CLAUDE_DIR" ] || [ -f "$CLAUDE_JSON" ]; then
+                    echo "Found claude config on attempt $RETRY"
+                    break
+                fi
+                RETRY=$((RETRY + 1))
+                echo "Waiting for 9pfuse to serve claude config (attempt $RETRY/5)..."
+                # Debug: list what's visible
+                echo "Contents of /mnt/host${HOST_HOME}/:"
+                ls -la "/mnt/host${HOST_HOME}/" 2>&1 || echo "(ls failed)"
+                sleep 1
+            done
+
+            if [ $RETRY -eq 5 ]; then
+                echo "WARNING: Timed out waiting for claude config"
+            fi
+
             # Symlink .claude.json
-            if [ -f "/mnt/host${HOST_HOME}/.claude.json" ]; then
-                ln -sf "/mnt/host${HOST_HOME}/.claude.json" /root/.claude.json
+            if [ -f "$CLAUDE_JSON" ]; then
+                ln -sf "$CLAUDE_JSON" /root/.claude.json
                 echo "Symlinked /root/.claude.json"
             fi
             # Symlink .claude directory
-            if [ -d "/mnt/host${HOST_HOME}/.claude" ]; then
-                ln -sf "/mnt/host${HOST_HOME}/.claude" /root/.claude
+            if [ -d "$CLAUDE_DIR" ]; then
+                ln -sf "$CLAUDE_DIR" /root/.claude
                 echo "Symlinked /root/.claude"
             fi
 
@@ -750,7 +779,11 @@ if grep -q "p9.token=" /proc/cmdline; then
     else
         echo "Failed to mount 9p filesystem via FUSE"
     fi
+else
+    echo "No p9.token found in /proc/cmdline, skipping 9p mount"
 fi
+
+echo "=== 9pmount.start finished at $(date) ==="
 `
 	localDDir := filepath.Join(mountDir, "etc", "local.d")
 	if err := os.MkdirAll(localDDir, 0755); err != nil {
@@ -764,6 +797,11 @@ fi
 	// Create swap file setup script
 	swapScript := `#!/bin/sh
 # Create and enable swap file on boot
+
+# Log all output to file
+exec >> /var/log/swap.log 2>&1
+echo "=== swap.start running at $(date) ==="
+
 SWAPFILE=/var/swap
 SWAPSIZE=1G
 
@@ -777,6 +815,8 @@ fi
 
 # Enable swap
 swapon "$SWAPFILE" 2>/dev/null && echo "Swap enabled: $SWAPFILE"
+
+echo "=== swap.start finished at $(date) ==="
 `
 	swapScriptPath := filepath.Join(localDDir, "swap.start")
 	if err := os.WriteFile(swapScriptPath, []byte(swapScript), 0755); err != nil {
