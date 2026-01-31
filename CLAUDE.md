@@ -137,7 +137,7 @@ homura 9p req deny <id>       # Deny a VM request
 
 ### How It Works
 
-- VMs mount 9p filesystem automatically at `/mnt/host` (via 9pfuse, has to be FUSE so that mmap() support exists instead of relying on linux kernel 9p mounting)
+- VMs mount 9p filesystem automatically at `/mnt/host` (via ./guest/9pfuse, has to be FUSE so that mmap() support exists instead of relying on linux kernel 9p mounting)
 - Uses Plan 9 filesystem protocol over TCP (port 5640)
 - Sparse visibility: only exposed paths are visible (others return ENOENT)
 - Token authentication prevents unauthorized access
