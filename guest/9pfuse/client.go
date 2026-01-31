@@ -374,6 +374,14 @@ func (c *P9Client) Create(path string, mode p9.FileMode, flags uint32) (uint32, 
 
 // flagsToP9Create converts FUSE create flags to p9 OpenFlags
 func flagsToP9Create(flags uint32) p9.OpenFlags {
+	// Special case: if no flags specified (0), default to read-write for file creation.
+	// This is necessary because O_RDONLY is also 0, but for creation we typically want
+	// write access. Callers who explicitly want read-only should pass O_RDONLY explicitly
+	// after creation via a separate Open call.
+	if flags == 0 {
+		return p9.ReadWrite
+	}
+
 	// Convert access mode
 	accMode := flags & syscall.O_ACCMODE
 
@@ -385,7 +393,7 @@ func flagsToP9Create(flags uint32) p9.OpenFlags {
 	case syscall.O_RDWR:
 		return p9.ReadWrite
 	default:
-		return p9.ReadWrite // Default to read-write for creation to be safe
+		return p9.ReadWrite
 	}
 }
 
