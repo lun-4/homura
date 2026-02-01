@@ -73,7 +73,7 @@ type VM struct {
 // NewVM creates a new VM instance with detected configuration
 func NewVM(shareMode ShareMode) (*VM, error) {
 	if shareMode == "" {
-		shareMode = ShareMode9P
+		shareMode = ShareModeVirtioFS
 	}
 	slog.Info("Initializing new VM instance", "share_mode", shareMode)
 

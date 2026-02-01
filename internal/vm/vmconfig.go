@@ -19,9 +19,9 @@ const (
 // ParseShareMode validates and returns a ShareMode from a string
 func ParseShareMode(s string) (ShareMode, error) {
 	switch strings.ToLower(s) {
-	case "9p", "":
+	case "9p":
 		return ShareMode9P, nil
-	case "virtiofs":
+	case "virtiofs", "":
 		return ShareModeVirtioFS, nil
 	default:
 		return "", fmt.Errorf("invalid share mode %q: must be '9p' or 'virtiofs'", s)
