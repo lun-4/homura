@@ -59,7 +59,7 @@ func BuildQEMUArgs(cfg *QEMUConfig) []string {
 // buildKernelCmdline builds the kernel command line string
 func buildKernelCmdline(cfg *QEMUConfig) string {
 	// Kernel parameters for microvm boot
-	cmdline := "earlyprintk=ttyS0 console=ttyS0 root=/dev/vda rootfstype=ext4 rw acpi=off"
+	cmdline := "earlyprintk=ttyS0 console=ttyS0 root=/dev/vda rootfstype=ext4 rw"
 
 	// Add 9p params
 	if cfg.NinePToken != "" {
