@@ -120,13 +120,6 @@ var ninepListCmd = &cobra.Command{
 	RunE:  commands.NinePList,
 }
 
-var ninepStatusCmd = &cobra.Command{
-	Use:   "status",
-	Short: "Show 9p server status",
-	Args:  cobra.NoArgs,
-	RunE:  commands.NinePStatus,
-}
-
 var ninepReqCmd = &cobra.Command{
 	Use:   "req",
 	Short: "Manage VM path requests",
@@ -148,10 +141,10 @@ var ninepReqApproveCmd = &cobra.Command{
 }
 
 var ninepReqDenyCmd = &cobra.Command{
-	Use:     "deny <request-id> [reason]",
+	Use:     "deny <request-id>",
 	Aliases: []string{"no"},
 	Short:   "Deny a VM path request",
-	Args:    cobra.RangeArgs(1, 2),
+	Args:    cobra.ExactArgs(1),
 	RunE:    commands.NinePReqDeny,
 }
 
@@ -188,7 +181,6 @@ func init() {
 	ninepCmd.AddCommand(ninepExposeCmd)
 	ninepCmd.AddCommand(ninepUnexposeCmd)
 	ninepCmd.AddCommand(ninepListCmd)
-	ninepCmd.AddCommand(ninepStatusCmd)
 	ninepCmd.AddCommand(ninepReqCmd)
 	ninepReqCmd.AddCommand(ninepReqListCmd)
 	ninepReqCmd.AddCommand(ninepReqApproveCmd)
