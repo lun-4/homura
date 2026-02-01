@@ -26,4 +26,5 @@ package vm
 // 16 - Force rc_sys="", remove Docker markers, disable TTY getty spam
 // 17 - Add backup hostname setting in 9pmount.start script
 // 18 - Write /etc/hostname directly in build.go (Docker export loses it)
-const VMImplementationVersion = 18
+// 19 - Add virtiofs support as alternative to 9p (fsmount.start now handles both modes)
+const VMImplementationVersion = 19

@@ -2,9 +2,13 @@ package commands
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -22,37 +26,6 @@ var NinePTargetPID *int
 
 // NinePTargetVMID is set by main.go to the -vm flag value
 var NinePTargetVMID *int
-
-// RPCRequest represents a JSON-RPC request
-type RPCRequest struct {
-	Method string      `json:"method"`
-	Params interface{} `json:"params"`
-	ID     int         `json:"id"`
-}
-
-// RPCResponse represents a JSON-RPC response
-type RPCResponse struct {
-	Result interface{} `json:"result,omitempty"`
-	Error  *RPCError   `json:"error,omitempty"`
-	ID     int         `json:"id"`
-}
-
-// RPCError represents a JSON-RPC error
-type RPCError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
-
-// ExposeParams represents parameters for the expose method
-type ExposeParams struct {
-	Path     string `json:"path"`
-	ReadOnly bool   `json:"readonly,omitempty"`
-}
-
-// UnexposeParams represents parameters for the unexpose method
-type UnexposeParams struct {
-	Path string `json:"path"`
-}
 
 // PathInfo represents path info in list result
 type PathInfo struct {
@@ -89,22 +62,365 @@ type ReqListResult struct {
 	Requests []RequestInfo `json:"requests"`
 }
 
-// ReqApproveParams represents parameters for req-approve
-type ReqApproveParams struct {
-	RequestID string `json:"request_id"`
-}
-
-// ReqDenyParams represents parameters for req-deny
-type ReqDenyParams struct {
-	RequestID string `json:"request_id"`
-	Reason    string `json:"reason,omitempty"`
-}
-
 // MessageResult represents a simple message result
 type MessageResult struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
 }
+
+// ShareController is the interface for controlling filesystem sharing backends
+type ShareController interface {
+	Expose(path string, readOnly bool) (*MessageResult, error)
+	Unexpose(path string) (*MessageResult, error)
+	List() (*ListResult, error)
+	Status() (*StatusResult, error)
+	ListRequests() (*ReqListResult, error)
+	ApproveRequest(id string) (*MessageResult, error)
+	DenyRequest(id string, reason string) (*MessageResult, error)
+}
+
+// ============================================================================
+// 9passthrough Controller (JSON-RPC over Unix socket)
+// ============================================================================
+
+// NinePController implements ShareController for 9passthrough
+type NinePController struct {
+	SocketPath string
+}
+
+// RPCRequest represents a JSON-RPC request
+type RPCRequest struct {
+	Method string      `json:"method"`
+	Params interface{} `json:"params"`
+	ID     int         `json:"id"`
+}
+
+// RPCResponse represents a JSON-RPC response
+type RPCResponse struct {
+	Result interface{} `json:"result,omitempty"`
+	Error  *RPCError   `json:"error,omitempty"`
+	ID     int         `json:"id"`
+}
+
+// RPCError represents a JSON-RPC error
+type RPCError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+// sendCommand sends a JSON-RPC command to the 9passthrough control socket
+func (c *NinePController) sendCommand(method string, params interface{}) (*RPCResponse, error) {
+	conn, err := net.Dial("unix", c.SocketPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to control socket: %w", err)
+	}
+	defer conn.Close()
+
+	request := RPCRequest{
+		Method: method,
+		Params: params,
+		ID:     1,
+	}
+
+	data, err := json.Marshal(request)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	data = append(data, '\n')
+	if _, err := conn.Write(data); err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+
+	scanner := bufio.NewScanner(conn)
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return nil, fmt.Errorf("failed to read response: %w", err)
+		}
+		return nil, fmt.Errorf("no response from server")
+	}
+
+	var response RPCResponse
+	if err := json.Unmarshal(scanner.Bytes(), &response); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &response, nil
+}
+
+func (c *NinePController) Expose(path string, readOnly bool) (*MessageResult, error) {
+	params := map[string]interface{}{"path": path, "readonly": readOnly}
+	resp, err := c.sendCommand("expose", params)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("%s", resp.Error.Message)
+	}
+	return &MessageResult{Success: true, Message: fmt.Sprintf("Exposed: %s", path)}, nil
+}
+
+func (c *NinePController) Unexpose(path string) (*MessageResult, error) {
+	params := map[string]interface{}{"path": path}
+	resp, err := c.sendCommand("unexpose", params)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("%s", resp.Error.Message)
+	}
+	return &MessageResult{Success: true, Message: fmt.Sprintf("Unexposed: %s", path)}, nil
+}
+
+func (c *NinePController) List() (*ListResult, error) {
+	resp, err := c.sendCommand("list", nil)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("%s", resp.Error.Message)
+	}
+
+	resultData, err := json.Marshal(resp.Result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to process result: %w", err)
+	}
+
+	var result ListResult
+	if err := json.Unmarshal(resultData, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse result: %w", err)
+	}
+
+	return &result, nil
+}
+
+func (c *NinePController) Status() (*StatusResult, error) {
+	resp, err := c.sendCommand("status", nil)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("%s", resp.Error.Message)
+	}
+
+	resultData, err := json.Marshal(resp.Result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to process result: %w", err)
+	}
+
+	var result StatusResult
+	if err := json.Unmarshal(resultData, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse result: %w", err)
+	}
+
+	return &result, nil
+}
+
+func (c *NinePController) ListRequests() (*ReqListResult, error) {
+	resp, err := c.sendCommand("req-list", nil)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("%s", resp.Error.Message)
+	}
+
+	resultData, err := json.Marshal(resp.Result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to process result: %w", err)
+	}
+
+	var result ReqListResult
+	if err := json.Unmarshal(resultData, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse result: %w", err)
+	}
+
+	return &result, nil
+}
+
+func (c *NinePController) ApproveRequest(id string) (*MessageResult, error) {
+	params := map[string]interface{}{"request_id": id}
+	resp, err := c.sendCommand("req-approve", params)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("%s", resp.Error.Message)
+	}
+
+	resultData, err := json.Marshal(resp.Result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to process result: %w", err)
+	}
+
+	var result MessageResult
+	if err := json.Unmarshal(resultData, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse result: %w", err)
+	}
+
+	return &result, nil
+}
+
+func (c *NinePController) DenyRequest(id string, reason string) (*MessageResult, error) {
+	params := map[string]interface{}{"request_id": id, "reason": reason}
+	resp, err := c.sendCommand("req-deny", params)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("%s", resp.Error.Message)
+	}
+
+	resultData, err := json.Marshal(resp.Result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to process result: %w", err)
+	}
+
+	var result MessageResult
+	if err := json.Unmarshal(resultData, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse result: %w", err)
+	}
+
+	return &result, nil
+}
+
+// ============================================================================
+// Virtiofs Controller (HTTP REST API)
+// ============================================================================
+
+// VirtiofsController implements ShareController for virtiofsd HTTP API
+type VirtiofsController struct {
+	AdminPort int
+	Token     string
+}
+
+func (c *VirtiofsController) doRequest(method, endpoint string, body interface{}) ([]byte, error) {
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d", c.AdminPort)
+	reqURL := baseURL + endpoint
+
+	var reqBody io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal request body: %w", err)
+		}
+		reqBody = bytes.NewReader(data)
+	}
+
+	req, err := http.NewRequest(method, reqURL, reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("server error: %s - %s", resp.Status, string(respBody))
+	}
+
+	return respBody, nil
+}
+
+func (c *VirtiofsController) Expose(path string, readOnly bool) (*MessageResult, error) {
+	mode := "rw"
+	if readOnly {
+		mode = "ro"
+	}
+	body := map[string]interface{}{"path": path, "mode": mode}
+	_, err := c.doRequest("POST", "/shares", body)
+	if err != nil {
+		return nil, err
+	}
+	return &MessageResult{Success: true, Message: fmt.Sprintf("Exposed: %s", path)}, nil
+}
+
+func (c *VirtiofsController) Unexpose(path string) (*MessageResult, error) {
+	endpoint := "/shares?path=" + url.QueryEscape(path)
+	_, err := c.doRequest("DELETE", endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &MessageResult{Success: true, Message: fmt.Sprintf("Unexposed: %s", path)}, nil
+}
+
+func (c *VirtiofsController) List() (*ListResult, error) {
+	respBody, err := c.doRequest("GET", "/shares", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result ListResult
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &result, nil
+}
+
+func (c *VirtiofsController) Status() (*StatusResult, error) {
+	respBody, err := c.doRequest("GET", "/status", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result StatusResult
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &result, nil
+}
+
+func (c *VirtiofsController) ListRequests() (*ReqListResult, error) {
+	respBody, err := c.doRequest("GET", "/pending-requests", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result ReqListResult
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &result, nil
+}
+
+func (c *VirtiofsController) ApproveRequest(id string) (*MessageResult, error) {
+	endpoint := fmt.Sprintf("/pending-requests/%s/approve", url.PathEscape(id))
+	_, err := c.doRequest("POST", endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &MessageResult{Success: true, Message: fmt.Sprintf("Request %s approved", id)}, nil
+}
+
+func (c *VirtiofsController) DenyRequest(id string, reason string) (*MessageResult, error) {
+	endpoint := fmt.Sprintf("/pending-requests/%s/deny", url.PathEscape(id))
+	body := map[string]interface{}{"reason": reason}
+	_, err := c.doRequest("POST", endpoint, body)
+	if err != nil {
+		return nil, err
+	}
+	return &MessageResult{Success: true, Message: fmt.Sprintf("Request %s denied", id)}, nil
+}
+
+// ============================================================================
+// Helper functions
+// ============================================================================
 
 // getTargetVM finds the VM to control based on -vm flag, -p flag, -d flag, or current directory
 func getTargetVM() (*vm.VMSlot, error) {
@@ -182,54 +498,44 @@ func getTargetVM() (*vm.VMSlot, error) {
 	return slots[choice-1], nil
 }
 
-// sendNinePCommand sends a JSON-RPC command to the 9passthrough control socket
-func sendNinePCommand(socketPath string, method string, params interface{}) (*RPCResponse, error) {
-	// Connect to Unix socket
-	conn, err := net.Dial("unix", socketPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to control socket: %w", err)
-	}
-	defer conn.Close()
-
-	// Build JSON-RPC request
-	request := RPCRequest{
-		Method: method,
-		Params: params,
-		ID:     1,
-	}
-
-	// Send request
-	data, err := json.Marshal(request)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	data = append(data, '\n')
-	if _, err := conn.Write(data); err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-
-	// Read response
-	scanner := bufio.NewScanner(conn)
-	if !scanner.Scan() {
-		if err := scanner.Err(); err != nil {
-			return nil, fmt.Errorf("failed to read response: %w", err)
+// getShareController returns the appropriate ShareController for the VM's share mode
+func getShareController(slot *vm.VMSlot) (ShareController, error) {
+	switch slot.ShareMode {
+	case "virtiofs":
+		// Read token from file
+		tokenFile := fmt.Sprintf("/tmp/virtiofs-token-%d", slot.VirtiofsPID)
+		tokenData, err := os.ReadFile(tokenFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read virtiofs token file: %w", err)
 		}
-		return nil, fmt.Errorf("no response from server")
-	}
+		lines := strings.Split(strings.TrimSpace(string(tokenData)), "\n")
+		if len(lines) < 2 {
+			return nil, fmt.Errorf("invalid virtiofs token file format")
+		}
+		token := lines[0]
+		adminPort, err := strconv.Atoi(lines[1])
+		if err != nil {
+			return nil, fmt.Errorf("invalid admin port in token file: %w", err)
+		}
+		return &VirtiofsController{AdminPort: adminPort, Token: token}, nil
 
-	// Parse response
-	var response RPCResponse
-	if err := json.Unmarshal(scanner.Bytes(), &response); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+	default: // "9p" or empty
+		return &NinePController{SocketPath: slot.NinePControlSocket}, nil
 	}
-
-	return &response, nil
 }
+
+// ============================================================================
+// Command handlers
+// ============================================================================
 
 // NinePExpose exposes a host path to the VM
 func NinePExpose(cmd *cobra.Command, args []string) error {
 	slot, err := getTargetVM()
+	if err != nil {
+		return err
+	}
+
+	controller, err := getShareController(slot)
 	if err != nil {
 		return err
 	}
@@ -248,22 +554,9 @@ func NinePExpose(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get absolute path: %w", err)
 	}
 
-	params := ExposeParams{Path: absPath, ReadOnly: readOnly}
-	response, err := sendNinePCommand(slot.NinePControlSocket, "expose", params)
+	result, err := controller.Expose(absPath, readOnly)
 	if err != nil {
 		return fmt.Errorf("failed to expose path: %w", err)
-	}
-
-	if response.Error != nil {
-		return fmt.Errorf("%s", response.Error.Message)
-	}
-
-	// Extract and print message from result
-	if result, ok := response.Result.(map[string]interface{}); ok {
-		if message, ok := result["message"].(string); ok {
-			fmt.Println(message)
-			return nil
-		}
 	}
 
 	mode := "rw"
@@ -271,12 +564,20 @@ func NinePExpose(cmd *cobra.Command, args []string) error {
 		mode = "ro"
 	}
 	fmt.Printf("Successfully exposed: %s (%s)\n", absPath, mode)
+	if result.Message != "" && result.Message != fmt.Sprintf("Exposed: %s", absPath) {
+		fmt.Println(result.Message)
+	}
 	return nil
 }
 
 // NinePUnexpose removes a path from the exposed set
 func NinePUnexpose(cmd *cobra.Command, args []string) error {
 	slot, err := getTargetVM()
+	if err != nil {
+		return err
+	}
+
+	controller, err := getShareController(slot)
 	if err != nil {
 		return err
 	}
@@ -289,22 +590,9 @@ func NinePUnexpose(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to get absolute path: %w", err)
 	}
 
-	params := UnexposeParams{Path: absPath}
-	response, err := sendNinePCommand(slot.NinePControlSocket, "unexpose", params)
+	_, err = controller.Unexpose(absPath)
 	if err != nil {
 		return fmt.Errorf("failed to unexpose path: %w", err)
-	}
-
-	if response.Error != nil {
-		return fmt.Errorf("%s", response.Error.Message)
-	}
-
-	// Extract and print message from result
-	if result, ok := response.Result.(map[string]interface{}); ok {
-		if message, ok := result["message"].(string); ok {
-			fmt.Println(message)
-			return nil
-		}
 	}
 
 	fmt.Printf("Successfully unexposed: %s\n", absPath)
@@ -318,24 +606,14 @@ func NinePList(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	response, err := sendNinePCommand(slot.NinePControlSocket, "list", nil)
+	controller, err := getShareController(slot)
+	if err != nil {
+		return err
+	}
+
+	result, err := controller.List()
 	if err != nil {
 		return fmt.Errorf("failed to list paths: %w", err)
-	}
-
-	if response.Error != nil {
-		return fmt.Errorf("%s", response.Error.Message)
-	}
-
-	// Parse result
-	resultData, err := json.Marshal(response.Result)
-	if err != nil {
-		return fmt.Errorf("failed to process result: %w", err)
-	}
-
-	var result ListResult
-	if err := json.Unmarshal(resultData, &result); err != nil {
-		return fmt.Errorf("failed to parse result: %w", err)
 	}
 
 	if len(result.Paths) == 0 {
@@ -355,34 +633,24 @@ func NinePList(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// NinePStatus shows 9p server status
+// NinePStatus shows filesystem server status
 func NinePStatus(cmd *cobra.Command, args []string) error {
 	slot, err := getTargetVM()
 	if err != nil {
 		return err
 	}
 
-	response, err := sendNinePCommand(slot.NinePControlSocket, "status", nil)
+	controller, err := getShareController(slot)
+	if err != nil {
+		return err
+	}
+
+	result, err := controller.Status()
 	if err != nil {
 		return fmt.Errorf("failed to get status: %w", err)
 	}
 
-	if response.Error != nil {
-		return fmt.Errorf("%s", response.Error.Message)
-	}
-
-	// Parse result
-	resultData, err := json.Marshal(response.Result)
-	if err != nil {
-		return fmt.Errorf("failed to process result: %w", err)
-	}
-
-	var result StatusResult
-	if err := json.Unmarshal(resultData, &result); err != nil {
-		return fmt.Errorf("failed to parse result: %w", err)
-	}
-
-	fmt.Println("Server Status:")
+	fmt.Printf("Server Status (mode: %s):\n", slot.ShareMode)
 	fmt.Printf("  Uptime:         %s\n", result.Uptime)
 	fmt.Printf("  Connections:    %d\n", result.Connections)
 	fmt.Printf("  Exposed Paths:  %d\n", result.ExposedCount)
@@ -408,24 +676,14 @@ func NinePReqList(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	response, err := sendNinePCommand(slot.NinePControlSocket, "req-list", nil)
+	controller, err := getShareController(slot)
+	if err != nil {
+		return err
+	}
+
+	result, err := controller.ListRequests()
 	if err != nil {
 		return fmt.Errorf("failed to list requests: %w", err)
-	}
-
-	if response.Error != nil {
-		return fmt.Errorf("%s", response.Error.Message)
-	}
-
-	// Parse result
-	resultData, err := json.Marshal(response.Result)
-	if err != nil {
-		return fmt.Errorf("failed to process result: %w", err)
-	}
-
-	var result ReqListResult
-	if err := json.Unmarshal(resultData, &result); err != nil {
-		return fmt.Errorf("failed to parse result: %w", err)
 	}
 
 	if len(result.Requests) == 0 {
@@ -453,27 +711,16 @@ func NinePReqApprove(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	controller, err := getShareController(slot)
+	if err != nil {
+		return err
+	}
+
 	requestID := args[0]
 
-	params := ReqApproveParams{RequestID: requestID}
-	response, err := sendNinePCommand(slot.NinePControlSocket, "req-approve", params)
+	result, err := controller.ApproveRequest(requestID)
 	if err != nil {
 		return fmt.Errorf("failed to approve request: %w", err)
-	}
-
-	if response.Error != nil {
-		return fmt.Errorf("%s", response.Error.Message)
-	}
-
-	// Parse result
-	resultData, err := json.Marshal(response.Result)
-	if err != nil {
-		return fmt.Errorf("failed to process result: %w", err)
-	}
-
-	var result MessageResult
-	if err := json.Unmarshal(resultData, &result); err != nil {
-		return fmt.Errorf("failed to parse result: %w", err)
 	}
 
 	fmt.Println(result.Message)
@@ -487,34 +734,20 @@ func NinePReqDeny(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	controller, err := getShareController(slot)
+	if err != nil {
+		return err
+	}
+
 	requestID := args[0]
 	reason := ""
 	if len(args) > 1 {
 		reason = args[1]
 	}
 
-	params := ReqDenyParams{
-		RequestID: requestID,
-		Reason:    reason,
-	}
-	response, err := sendNinePCommand(slot.NinePControlSocket, "req-deny", params)
+	result, err := controller.DenyRequest(requestID, reason)
 	if err != nil {
 		return fmt.Errorf("failed to deny request: %w", err)
-	}
-
-	if response.Error != nil {
-		return fmt.Errorf("%s", response.Error.Message)
-	}
-
-	// Parse result
-	resultData, err := json.Marshal(response.Result)
-	if err != nil {
-		return fmt.Errorf("failed to process result: %w", err)
-	}
-
-	var result MessageResult
-	if err := json.Unmarshal(resultData, &result); err != nil {
-		return fmt.Errorf("failed to parse result: %w", err)
 	}
 
 	fmt.Println(result.Message)

@@ -735,19 +735,35 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 		slog.Warn("Failed to write hostname", "error", err)
 	}
 
-	// Create 9p auto-mount script using FUSE
+	// Create filesystem mount script that handles both virtiofs and 9p modes
 	ninepScript := `#!/bin/sh
-# Auto-mount 9p filesystem via FUSE if kernel params present
+# Auto-mount filesystem (virtiofs or 9p via FUSE) based on kernel params
 
 # Log all output to file
-exec >> /var/log/9pmount.log 2>&1
-echo "=== 9pmount.start running at $(date) ==="
+exec >> /var/log/fsmount.log 2>&1
+echo "=== fsmount.start running at $(date) ==="
 
 # Ensure hostname is set (backup in case hostname service didn't run)
 hostname -F /etc/hostname 2>/dev/null || hostname homura-vm
 
-if grep -q "p9.token=" /proc/cmdline; then
-    mkdir -p /mnt/host
+mkdir -p /mnt/host
+
+# Check for virtiofs mode first
+if grep -q "virtiofs.token=" /proc/cmdline; then
+    echo "Using virtiofs mode"
+
+    # Mount virtiofs - the kernel driver handles this directly
+    mount -t virtiofs hostfs /mnt/host
+
+    if mountpoint -q /mnt/host; then
+        echo "virtiofs mounted at /mnt/host"
+    else
+        echo "Failed to mount virtiofs"
+    fi
+
+# Fall back to 9p/FUSE mode
+elif grep -q "p9.token=" /proc/cmdline; then
+    echo "Using 9p/FUSE mode"
 
     # Extract 9p listen port from kernel cmdline
     P9_PORT=$(grep -o 'p9.listenport=[0-9]*' /proc/cmdline | cut -d= -f2)
@@ -765,66 +781,67 @@ if grep -q "p9.token=" /proc/cmdline; then
     # Wait a moment for mount to complete
     sleep 1
 
-    # Check if mounted
     if mountpoint -q /mnt/host; then
         echo "9p filesystem mounted at /mnt/host (FUSE) on port $P9_PORT"
-
-        # Symlink Claude config files if host.home is provided
-        HOST_HOME=$(grep -o 'host.home=[^ ]*' /proc/cmdline | cut -d= -f2)
-        echo "HOST_HOME='$HOST_HOME'"
-        if [ -n "$HOST_HOME" ]; then
-            # Wait for 9pfuse to be ready to serve paths (retry up to 5 times)
-            CLAUDE_DIR="/mnt/host${HOST_HOME}/.claude"
-            CLAUDE_JSON="/mnt/host${HOST_HOME}/.claude.json"
-            echo "Looking for CLAUDE_DIR='$CLAUDE_DIR' CLAUDE_JSON='$CLAUDE_JSON'"
-            RETRY=0
-            while [ $RETRY -lt 5 ]; do
-                # Check if at least one claude config exists, break if found
-                if [ -d "$CLAUDE_DIR" ] || [ -f "$CLAUDE_JSON" ]; then
-                    echo "Found claude config on attempt $RETRY"
-                    break
-                fi
-                RETRY=$((RETRY + 1))
-                echo "Waiting for 9pfuse to serve claude config (attempt $RETRY/5)..."
-                # Debug: list what's visible
-                echo "Contents of /mnt/host${HOST_HOME}/:"
-                ls -la "/mnt/host${HOST_HOME}/" 2>&1 || echo "(ls failed)"
-                sleep 1
-            done
-
-            if [ $RETRY -eq 5 ]; then
-                echo "WARNING: Timed out waiting for claude config"
-            fi
-
-            # Symlink .claude.json
-            if [ -f "$CLAUDE_JSON" ]; then
-                ln -sf "$CLAUDE_JSON" /root/.claude.json
-                echo "Symlinked /root/.claude.json"
-            fi
-            # Symlink .claude directory
-            if [ -d "$CLAUDE_DIR" ]; then
-                ln -sf "$CLAUDE_DIR" /root/.claude
-                echo "Symlinked /root/.claude"
-            fi
-
-            # Append user VM CLAUDE.md customizations if they exist
-            USER_CLAUDE="/mnt/host${HOST_HOME}/.config/homura/CLAUDE.md"
-            if [ -f "$USER_CLAUDE" ]; then
-                echo "" >> /etc/homura/claude-config/CLAUDE.md
-                echo "# User Customizations" >> /etc/homura/claude-config/CLAUDE.md
-                echo "" >> /etc/homura/claude-config/CLAUDE.md
-                cat "$USER_CLAUDE" >> /etc/homura/claude-config/CLAUDE.md
-                echo "Appended user CLAUDE.md customizations"
-            fi
-        fi
     else
         echo "Failed to mount 9p filesystem via FUSE"
     fi
 else
-    echo "No p9.token found in /proc/cmdline, skipping 9p mount"
+    echo "No filesystem sharing mode detected in /proc/cmdline"
 fi
 
-echo "=== 9pmount.start finished at $(date) ==="
+# Common post-mount setup: symlink Claude config files
+if mountpoint -q /mnt/host; then
+    HOST_HOME=$(grep -o 'host.home=[^ ]*' /proc/cmdline | cut -d= -f2)
+    echo "HOST_HOME='$HOST_HOME'"
+    if [ -n "$HOST_HOME" ]; then
+        # Wait for filesystem to be ready to serve paths (retry up to 5 times)
+        CLAUDE_DIR="/mnt/host${HOST_HOME}/.claude"
+        CLAUDE_JSON="/mnt/host${HOST_HOME}/.claude.json"
+        echo "Looking for CLAUDE_DIR='$CLAUDE_DIR' CLAUDE_JSON='$CLAUDE_JSON'"
+        RETRY=0
+        while [ $RETRY -lt 5 ]; do
+            # Check if at least one claude config exists, break if found
+            if [ -d "$CLAUDE_DIR" ] || [ -f "$CLAUDE_JSON" ]; then
+                echo "Found claude config on attempt $RETRY"
+                break
+            fi
+            RETRY=$((RETRY + 1))
+            echo "Waiting for filesystem to serve claude config (attempt $RETRY/5)..."
+            # Debug: list what's visible
+            echo "Contents of /mnt/host${HOST_HOME}/:"
+            ls -la "/mnt/host${HOST_HOME}/" 2>&1 || echo "(ls failed)"
+            sleep 1
+        done
+
+        if [ $RETRY -eq 5 ]; then
+            echo "WARNING: Timed out waiting for claude config"
+        fi
+
+        # Symlink .claude.json
+        if [ -f "$CLAUDE_JSON" ]; then
+            ln -sf "$CLAUDE_JSON" /root/.claude.json
+            echo "Symlinked /root/.claude.json"
+        fi
+        # Symlink .claude directory
+        if [ -d "$CLAUDE_DIR" ]; then
+            ln -sf "$CLAUDE_DIR" /root/.claude
+            echo "Symlinked /root/.claude"
+        fi
+
+        # Append user VM CLAUDE.md customizations if they exist
+        USER_CLAUDE="/mnt/host${HOST_HOME}/.config/homura/CLAUDE.md"
+        if [ -f "$USER_CLAUDE" ]; then
+            echo "" >> /etc/homura/claude-config/CLAUDE.md
+            echo "# User Customizations" >> /etc/homura/claude-config/CLAUDE.md
+            echo "" >> /etc/homura/claude-config/CLAUDE.md
+            cat "$USER_CLAUDE" >> /etc/homura/claude-config/CLAUDE.md
+            echo "Appended user CLAUDE.md customizations"
+        fi
+    fi
+fi
+
+echo "=== fsmount.start finished at $(date) ==="
 `
 	localDDir := filepath.Join(mountDir, "etc", "local.d")
 	if err := os.MkdirAll(localDDir, 0755); err != nil {

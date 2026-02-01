@@ -14,6 +14,7 @@ var (
 	ninepTargetDir  string // Global flag for all 9p commands
 	ninepTargetPID  int    // Target 9passthrough by PID
 	ninepTargetVMID int    // Target VM by slot number
+	shareModeFlag   string // Filesystem sharing mode: "9p" or "virtiofs"
 )
 
 var rootCmd = &cobra.Command{
@@ -68,14 +69,14 @@ var lsCmd = &cobra.Command{
 
 var vmCmd = &cobra.Command{
 	Use:   "vm [branch-name]",
-	Short: "Launch a QEMU microvm with 9p mounts",
+	Short: "Launch a QEMU microvm with filesystem sharing",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		branchName := ""
 		if len(args) > 0 {
 			branchName = args[0]
 		}
-		return commands.RunVM(cmd, args, branchName)
+		return commands.RunVM(cmd, args, branchName, shareModeFlag)
 	},
 }
 
@@ -156,6 +157,10 @@ var ninepReqDenyCmd = &cobra.Command{
 
 func init() {
 	rmCmd.Flags().BoolVarP(&forceFlag, "force", "f", false, "Force removal even with uncommitted changes")
+
+	// VM command flags
+	vmCmd.Flags().StringVar(&shareModeFlag, "share-mode", "9p",
+		"Filesystem sharing mode: '9p' (default, uses FUSE) or 'virtiofs' (uses kernel driver)")
 
 	rootCmd.AddCommand(cloneCmd)
 	rootCmd.AddCommand(shCmd)

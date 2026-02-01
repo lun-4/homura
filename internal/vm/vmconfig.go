@@ -8,6 +8,26 @@ import (
 	"strings"
 )
 
+// ShareMode represents the filesystem sharing mode for VMs
+type ShareMode string
+
+const (
+	ShareMode9P      ShareMode = "9p"
+	ShareModeVirtioFS ShareMode = "virtiofs"
+)
+
+// ParseShareMode validates and returns a ShareMode from a string
+func ParseShareMode(s string) (ShareMode, error) {
+	switch strings.ToLower(s) {
+	case "9p", "":
+		return ShareMode9P, nil
+	case "virtiofs":
+		return ShareModeVirtioFS, nil
+	default:
+		return "", fmt.Errorf("invalid share mode %q: must be '9p' or 'virtiofs'", s)
+	}
+}
+
 // VMConfig represents the persistent VM configuration
 type VMConfig struct {
 	ConfigVersion int      `json:"configVersion"`

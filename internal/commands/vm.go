@@ -51,8 +51,14 @@ func formatRelativeTime(createdAtMs int64) string {
 }
 
 // RunVM implements the `homura vm` command
-func RunVM(cmd *cobra.Command, args []string, branchName string) error {
-	slog.Info("Starting homura VM")
+func RunVM(cmd *cobra.Command, args []string, branchName string, shareModeStr string) error {
+	// Parse and validate share mode
+	shareMode, err := vm.ParseShareMode(shareModeStr)
+	if err != nil {
+		return err
+	}
+
+	slog.Info("Starting homura VM", "share_mode", shareMode)
 
 	// Get current working directory
 	cwd, err := os.Getwd()
@@ -145,7 +151,7 @@ RUN echo 'set -gx MY_VAR value' >> /root/.config/fish/config.fish
 	}
 
 	// Create new VM instance
-	vmInstance, err := vm.NewVM()
+	vmInstance, err := vm.NewVM(shareMode)
 	if err != nil {
 		return fmt.Errorf("failed to create VM: %w", err)
 	}

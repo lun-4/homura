@@ -26,11 +26,20 @@ type VMSlot struct {
 	VMPID              int
 	PasstSocketPath    string
 
-	// 9p fields
+	// Share mode
+	ShareMode          string // "9p" or "virtiofs"
+
+	// 9p fields (used when ShareMode == "9p")
 	WorkingDir         string
 	NinePPID           int
 	NinePControlSocket string
 	NinePControlPort   int
+
+	// virtiofs fields (used when ShareMode == "virtiofs")
+	VirtiofsPID        int
+	VirtiofsSocket     string
+	VirtiofsAdminPort  int
+	VirtiofsVMPort     int
 
 	// Metadata
 	CreatedAt int64 // Unix milliseconds
@@ -73,7 +82,12 @@ func initGlobalStateDB() error {
 		ninep_pid INTEGER NOT NULL,
 		ninep_control_socket TEXT NOT NULL,
 		ninep_control_port INTEGER NOT NULL,
-		created_at INTEGER NOT NULL
+		created_at INTEGER NOT NULL,
+		share_mode TEXT NOT NULL DEFAULT '9p',
+		virtiofs_pid INTEGER NOT NULL DEFAULT 0,
+		virtiofs_socket TEXT NOT NULL DEFAULT '',
+		virtiofs_admin_port INTEGER NOT NULL DEFAULT 0,
+		virtiofs_vm_port INTEGER NOT NULL DEFAULT 0
 	) STRICT;
 
 	CREATE INDEX IF NOT EXISTS idx_vm_pid ON vm_slots(vm_pid);
@@ -83,6 +97,19 @@ func initGlobalStateDB() error {
 
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("failed to create schema: %w", err)
+	}
+
+	// Add new columns for virtiofs support if they don't exist (migration for existing DBs)
+	migrations := []string{
+		"ALTER TABLE vm_slots ADD COLUMN share_mode TEXT NOT NULL DEFAULT '9p'",
+		"ALTER TABLE vm_slots ADD COLUMN virtiofs_pid INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE vm_slots ADD COLUMN virtiofs_socket TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE vm_slots ADD COLUMN virtiofs_admin_port INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE vm_slots ADD COLUMN virtiofs_vm_port INTEGER NOT NULL DEFAULT 0",
+	}
+	for _, migration := range migrations {
+		// Ignore errors since columns may already exist
+		db.Exec(migration)
 	}
 
 	return nil
@@ -159,8 +186,24 @@ func CleanupStaleSlots() error {
 	return nil
 }
 
+// VMSlotParams contains the parameters for allocating a VM slot
+type VMSlotParams struct {
+	SocketPath         string
+	WorkingDir         string
+	ShareMode          string
+	// 9p params (used when ShareMode == "9p")
+	NinePPID           int
+	NinePSocket        string
+	NinePPort          int
+	// virtiofs params (used when ShareMode == "virtiofs")
+	VirtiofsPID        int
+	VirtiofsSocket     string
+	VirtiofsAdminPort  int
+	VirtiofsVMPort     int
+}
+
 // AllocateVMSlot finds and claims the next available slot
-func AllocateVMSlot(socketPath, workingDir string, ninepPID int, ninepSocket string, ninepPort int) (*VMSlot, error) {
+func AllocateVMSlot(params VMSlotParams) (*VMSlot, error) {
 	if err := initGlobalStateDB(); err != nil {
 		return nil, err
 	}
@@ -215,15 +258,24 @@ func AllocateVMSlot(socketPath, workingDir string, ninepPID int, ninepSocket str
 	// Insert the slot
 	vmPID := os.Getpid()
 	createdAt := time.Now().UnixMilli()
+
+	shareMode := params.ShareMode
+	if shareMode == "" {
+		shareMode = "9p"
+	}
+
 	_, err = db.Exec(`
 		INSERT INTO vm_slots (
 			slot_number, ip_address, port_start, port_end, vm_pid,
 			passt_socket_path, working_dir, ninep_pid, ninep_control_socket,
-			ninep_control_port, created_at
+			ninep_control_port, created_at, share_mode, virtiofs_pid,
+			virtiofs_socket, virtiofs_admin_port, virtiofs_vm_port
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, nextSlot, ipAddress, portStart, portEnd, vmPID,
-	   socketPath, workingDir, ninepPID, ninepSocket, ninepPort, createdAt)
+		params.SocketPath, params.WorkingDir, params.NinePPID, params.NinePSocket,
+		params.NinePPort, createdAt, shareMode, params.VirtiofsPID,
+		params.VirtiofsSocket, params.VirtiofsAdminPort, params.VirtiofsVMPort)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert slot: %w", err)
 	}
@@ -239,11 +291,17 @@ func AllocateVMSlot(socketPath, workingDir string, ninepPID int, ninepSocket str
 		PortStart:          portStart,
 		PortEnd:            portEnd,
 		VMPID:              vmPID,
-		PasstSocketPath:    socketPath,
-		WorkingDir:         workingDir,
-		NinePPID:           ninepPID,
-		NinePControlSocket: ninepSocket,
-		NinePControlPort:   ninepPort,
+		PasstSocketPath:    params.SocketPath,
+		ShareMode:          shareMode,
+		WorkingDir:         params.WorkingDir,
+		NinePPID:           params.NinePPID,
+		NinePControlSocket: params.NinePSocket,
+		NinePControlPort:   params.NinePPort,
+		VirtiofsPID:        params.VirtiofsPID,
+		VirtiofsSocket:     params.VirtiofsSocket,
+		VirtiofsAdminPort:  params.VirtiofsAdminPort,
+		VirtiofsVMPort:     params.VirtiofsVMPort,
+		CreatedAt:          createdAt,
 	}, nil
 }
 
@@ -288,13 +346,16 @@ func FindVMByWorkDir(workDir string) (*VMSlot, error) {
 	err = db.QueryRow(`
 		SELECT slot_number, ip_address, port_start, port_end, vm_pid,
 		       passt_socket_path, working_dir, ninep_pid, ninep_control_socket,
-		       ninep_control_port
+		       ninep_control_port, share_mode, virtiofs_pid, virtiofs_socket,
+		       virtiofs_admin_port, virtiofs_vm_port
 		FROM vm_slots
 		WHERE working_dir = ?
 	`, workDir).Scan(
 		&slot.SlotNumber, &slot.IPAddress, &slot.PortStart, &slot.PortEnd,
 		&slot.VMPID, &slot.PasstSocketPath, &slot.WorkingDir,
 		&slot.NinePPID, &slot.NinePControlSocket, &slot.NinePControlPort,
+		&slot.ShareMode, &slot.VirtiofsPID, &slot.VirtiofsSocket,
+		&slot.VirtiofsAdminPort, &slot.VirtiofsVMPort,
 	)
 
 	if err == sql.ErrNoRows {
@@ -327,7 +388,8 @@ func FindVMsByWorkDir(workDir string) ([]*VMSlot, error) {
 	rows, err := db.Query(`
 		SELECT slot_number, ip_address, port_start, port_end, vm_pid,
 		       passt_socket_path, working_dir, ninep_pid, ninep_control_socket,
-		       ninep_control_port, created_at
+		       ninep_control_port, created_at, share_mode, virtiofs_pid,
+		       virtiofs_socket, virtiofs_admin_port, virtiofs_vm_port
 		FROM vm_slots
 		WHERE working_dir = ?
 		ORDER BY slot_number
@@ -344,7 +406,8 @@ func FindVMsByWorkDir(workDir string) ([]*VMSlot, error) {
 			&slot.SlotNumber, &slot.IPAddress, &slot.PortStart, &slot.PortEnd,
 			&slot.VMPID, &slot.PasstSocketPath, &slot.WorkingDir,
 			&slot.NinePPID, &slot.NinePControlSocket, &slot.NinePControlPort,
-			&slot.CreatedAt,
+			&slot.CreatedAt, &slot.ShareMode, &slot.VirtiofsPID,
+			&slot.VirtiofsSocket, &slot.VirtiofsAdminPort, &slot.VirtiofsVMPort,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
@@ -379,13 +442,16 @@ func FindVMBySlot(slotNumber int) (*VMSlot, error) {
 	err = db.QueryRow(`
 		SELECT slot_number, ip_address, port_start, port_end, vm_pid,
 		       passt_socket_path, working_dir, ninep_pid, ninep_control_socket,
-		       ninep_control_port
+		       ninep_control_port, share_mode, virtiofs_pid, virtiofs_socket,
+		       virtiofs_admin_port, virtiofs_vm_port
 		FROM vm_slots
 		WHERE slot_number = ?
 	`, slotNumber).Scan(
 		&slot.SlotNumber, &slot.IPAddress, &slot.PortStart, &slot.PortEnd,
 		&slot.VMPID, &slot.PasstSocketPath, &slot.WorkingDir,
 		&slot.NinePPID, &slot.NinePControlSocket, &slot.NinePControlPort,
+		&slot.ShareMode, &slot.VirtiofsPID, &slot.VirtiofsSocket,
+		&slot.VirtiofsAdminPort, &slot.VirtiofsVMPort,
 	)
 
 	if err == sql.ErrNoRows {
@@ -419,13 +485,16 @@ func FindVMByNinePPID(ninepPID int) (*VMSlot, error) {
 	err = db.QueryRow(`
 		SELECT slot_number, ip_address, port_start, port_end, vm_pid,
 		       passt_socket_path, working_dir, ninep_pid, ninep_control_socket,
-		       ninep_control_port
+		       ninep_control_port, share_mode, virtiofs_pid, virtiofs_socket,
+		       virtiofs_admin_port, virtiofs_vm_port
 		FROM vm_slots
 		WHERE ninep_pid = ?
 	`, ninepPID).Scan(
 		&slot.SlotNumber, &slot.IPAddress, &slot.PortStart, &slot.PortEnd,
 		&slot.VMPID, &slot.PasstSocketPath, &slot.WorkingDir,
 		&slot.NinePPID, &slot.NinePControlSocket, &slot.NinePControlPort,
+		&slot.ShareMode, &slot.VirtiofsPID, &slot.VirtiofsSocket,
+		&slot.VirtiofsAdminPort, &slot.VirtiofsVMPort,
 	)
 
 	if err == sql.ErrNoRows {

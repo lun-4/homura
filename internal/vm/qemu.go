@@ -7,16 +7,24 @@ import (
 
 // QEMUConfig contains configuration for launching QEMU
 type QEMUConfig struct {
-	KernelPath       string
-	InitrdPath       string
-	RootfsPath       string // Path to ephemeral ext4 disk
-	Memory           int    // MB
-	CPUs             int
-	PasstSocket      string // Passt Unix socket path
+	KernelPath  string
+	InitrdPath  string
+	RootfsPath  string    // Path to ephemeral ext4 disk
+	Memory      int       // MB
+	CPUs        int
+	PasstSocket string    // Passt Unix socket path
+	HostHomeDir string    // Host user's home directory
+	ShareMode   ShareMode // Filesystem sharing mode
+
+	// 9p fields (used when ShareMode == "9p")
 	NinePToken       string // 9p authentication token
 	NinePControlPort int    // 9p control port
 	NinePPort        int    // 9p listen port (auto-allocated)
-	HostHomeDir      string // Host user's home directory
+
+	// virtiofs fields (used when ShareMode == "virtiofs")
+	VirtiofsSocket  string // vhost-user socket for QEMU
+	VirtiofsVMToken string // Token for VM to authenticate with virtiofsd
+	VirtiofsVMPort  int    // Port for VM to send requests to virtiofsd
 }
 
 // BuildQEMUArgs builds the argument list for launching QEMU with q35 machine
@@ -27,8 +35,11 @@ func BuildQEMUArgs(cfg *QEMUConfig) []string {
 		"-enable-kvm",
 		"-cpu", "host",
 
-		// Memory and CPUs
+		// Memory - must use memfd backend with share=on for vhost-user
 		"-m", fmt.Sprintf("%dM", cfg.Memory),
+		"-object", fmt.Sprintf("memory-backend-memfd,id=mem,size=%dM,share=on", cfg.Memory),
+		"-numa", "node,memdev=mem",
+
 		"-smp", strconv.Itoa(cfg.CPUs),
 
 		// Direct kernel boot with initrd
@@ -53,6 +64,14 @@ func BuildQEMUArgs(cfg *QEMUConfig) []string {
 		"-device", "virtio-net-pci,netdev=net0",
 	}
 
+	// Add virtiofs device if using virtiofs mode
+	if cfg.ShareMode == ShareModeVirtioFS && cfg.VirtiofsSocket != "" {
+		args = append(args,
+			"-chardev", fmt.Sprintf("socket,id=virtiofs0,path=%s", cfg.VirtiofsSocket),
+			"-device", "vhost-user-fs-pci,queue-size=1024,chardev=virtiofs0,tag=hostfs",
+		)
+	}
+
 	return args
 }
 
@@ -61,10 +80,20 @@ func buildKernelCmdline(cfg *QEMUConfig) string {
 	// Kernel parameters for microvm boot
 	cmdline := "earlyprintk=ttyS0 console=ttyS0 root=/dev/vda rootfstype=ext4 rw"
 
-	// Add 9p params
-	if cfg.NinePToken != "" {
-		cmdline += fmt.Sprintf(" p9.token=%s p9.port=%d p9.listenport=%d",
-			cfg.NinePToken, cfg.NinePControlPort, cfg.NinePPort)
+	// Add share-mode-specific params
+	switch cfg.ShareMode {
+	case ShareModeVirtioFS:
+		// virtiofs mode params
+		if cfg.VirtiofsVMToken != "" {
+			cmdline += fmt.Sprintf(" virtiofs.token=%s virtiofs.port=%d",
+				cfg.VirtiofsVMToken, cfg.VirtiofsVMPort)
+		}
+	default: // ShareMode9P
+		// 9p mode params
+		if cfg.NinePToken != "" {
+			cmdline += fmt.Sprintf(" p9.token=%s p9.port=%d p9.listenport=%d",
+				cfg.NinePToken, cfg.NinePControlPort, cfg.NinePPort)
+		}
 	}
 
 	// Add host home directory for Claude config symlinks
