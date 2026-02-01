@@ -36,10 +36,11 @@ type ShareInfo struct {
 
 // RequestInfo represents information about a path request
 type RequestInfo struct {
-	ID     int    `json:"id"`
-	Path   string `json:"path"`
-	Mode   string `json:"mode"`   // "rw" or "ro"
-	Status string `json:"status"` // "pending", "approved", "denied"
+	ID         int    `json:"id"`
+	Path       string `json:"path"`
+	Mode       string `json:"mode"`        // "rw" or "ro"
+	Status     string `json:"status"`      // "pending", "approved", "denied"
+	DenyReason string `json:"deny_reason,omitempty"`
 }
 
 // MessageResult represents a simple message result
@@ -55,7 +56,7 @@ type ShareController interface {
 	List() ([]ShareInfo, error)
 	ListRequests() ([]RequestInfo, error)
 	ApproveRequest(id int) (*MessageResult, error)
-	DenyRequest(id int) (*MessageResult, error)
+	DenyRequest(id int, reason string) (*MessageResult, error)
 }
 
 // ============================================================================
@@ -207,8 +208,8 @@ func (c *NinePController) ApproveRequest(id int) (*MessageResult, error) {
 	return &MessageResult{Success: true, Message: fmt.Sprintf("Request %d approved", id)}, nil
 }
 
-func (c *NinePController) DenyRequest(id int) (*MessageResult, error) {
-	params := map[string]any{"request_id": id}
+func (c *NinePController) DenyRequest(id int, reason string) (*MessageResult, error) {
+	params := map[string]any{"request_id": id, "reason": reason}
 	resp, err := c.sendCommand("req-deny", params)
 	if err != nil {
 		return nil, err
@@ -216,7 +217,11 @@ func (c *NinePController) DenyRequest(id int) (*MessageResult, error) {
 	if resp.Error != nil {
 		return nil, fmt.Errorf("%s", resp.Error.Message)
 	}
-	return &MessageResult{Success: true, Message: fmt.Sprintf("Request %d denied", id)}, nil
+	msg := fmt.Sprintf("Request %d denied", id)
+	if reason != "" {
+		msg = fmt.Sprintf("Request %d denied: %s", id, reason)
+	}
+	return &MessageResult{Success: true, Message: msg}, nil
 }
 
 // ============================================================================
@@ -329,13 +334,21 @@ func (c *VirtiofsController) ApproveRequest(id int) (*MessageResult, error) {
 	return &MessageResult{Success: true, Message: fmt.Sprintf("Request %d approved", id)}, nil
 }
 
-func (c *VirtiofsController) DenyRequest(id int) (*MessageResult, error) {
+func (c *VirtiofsController) DenyRequest(id int, reason string) (*MessageResult, error) {
 	endpoint := fmt.Sprintf("/pending-requests/%d/deny", id)
-	_, err := c.doRequest("POST", endpoint, nil)
+	var body interface{}
+	if reason != "" {
+		body = map[string]string{"reason": reason}
+	}
+	_, err := c.doRequest("POST", endpoint, body)
 	if err != nil {
 		return nil, err
 	}
-	return &MessageResult{Success: true, Message: fmt.Sprintf("Request %d denied", id)}, nil
+	msg := fmt.Sprintf("Request %d denied", id)
+	if reason != "" {
+		msg = fmt.Sprintf("Request %d denied: %s", id, reason)
+	}
+	return &MessageResult{Success: true, Message: msg}, nil
 }
 
 // ============================================================================
@@ -571,9 +584,13 @@ func NinePReqList(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	fmt.Printf("Pending requests (%d):\n", len(requests))
+	fmt.Printf("Requests (%d):\n", len(requests))
 	for _, req := range requests {
-		fmt.Printf("  [%d] %s (%s) - %s\n", req.ID, req.Path, req.Mode, req.Status)
+		if req.DenyReason != "" && req.Status == "denied" {
+			fmt.Printf("  [%d] %s (%s) - %s: %s\n", req.ID, req.Path, req.Mode, req.Status, req.DenyReason)
+		} else {
+			fmt.Printf("  [%d] %s (%s) - %s\n", req.ID, req.Path, req.Mode, req.Status)
+		}
 	}
 
 	return nil
@@ -622,7 +639,13 @@ func NinePReqDeny(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid request ID: %w", err)
 	}
 
-	result, err := controller.DenyRequest(requestID)
+	// Join remaining args as the reason
+	reason := ""
+	if len(args) > 1 {
+		reason = strings.Join(args[1:], " ")
+	}
+
+	result, err := controller.DenyRequest(requestID, reason)
 	if err != nil {
 		return fmt.Errorf("failed to deny request: %w", err)
 	}

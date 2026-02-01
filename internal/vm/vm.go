@@ -112,6 +112,14 @@ func NewVM(shareMode ShareMode) (*VM, error) {
 		return nil, fmt.Errorf("no SSH public key found in ~/.ssh/ (tried: id_ed25519.pub, id_rsa.pub, id_ecdsa.pub)")
 	}
 
+	// Pre-allocate slot number for virtiofsd (it needs the slot number for --vm-name)
+	peekedSlot, err := PeekNextSlotNumber()
+	if err != nil {
+		os.RemoveAll(stateDir)
+		return nil, fmt.Errorf("failed to peek next VM slot: %w", err)
+	}
+	slog.Info("Pre-allocated slot number", "slot", peekedSlot)
+
 	// Variables for slot allocation params
 	var slotParams VMSlotParams
 	slotParams.SocketPath = socketPath
@@ -132,7 +140,7 @@ func NewVM(shareMode ShareMode) (*VM, error) {
 		// Start virtiofsd
 		slog.Info("Starting virtiofsd", "workdir", workDir)
 
-		virtiofsManager, err = NewVirtiofsManager(stateDir, homeDir, workDir, extraPaths)
+		virtiofsManager, err = NewVirtiofsManager(stateDir, homeDir, workDir, peekedSlot, extraPaths)
 		if err != nil {
 			os.RemoveAll(stateDir)
 			return nil, fmt.Errorf("failed to create virtiofs manager: %w", err)

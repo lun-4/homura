@@ -27,4 +27,7 @@ package vm
 // 17 - Add backup hostname setting in 9pmount.start script
 // 18 - Write /etc/hostname directly in build.go (Docker export loses it)
 // 19 - Add virtiofs support as alternative to 9p (fsmount.start now handles both modes)
-const VMImplementationVersion = 19
+// 20 - Update 9pvm-request to support virtiofs mode and display deny reasons
+// 21 - 9pvm-request: require absolute paths, strip /mnt/host prefix, add -h help
+// 22 - Update virtiofsd binary
+const VMImplementationVersion = 22

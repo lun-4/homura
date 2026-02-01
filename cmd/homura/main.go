@@ -141,10 +141,10 @@ var ninepReqApproveCmd = &cobra.Command{
 }
 
 var ninepReqDenyCmd = &cobra.Command{
-	Use:     "deny <request-id>",
+	Use:     "deny <request-id> [reason...]",
 	Aliases: []string{"no"},
-	Short:   "Deny a VM path request",
-	Args:    cobra.ExactArgs(1),
+	Short:   "Deny a VM path request with optional reason",
+	Args:    cobra.MinimumNArgs(1),
 	RunE:    commands.NinePReqDeny,
 }
 

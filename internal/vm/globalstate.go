@@ -202,6 +202,42 @@ type VMSlotParams struct {
 	VirtiofsVMPort     int
 }
 
+// PeekNextSlotNumber finds and returns the next available slot number without allocating it.
+// This is used to pass slot info to virtiofsd before full allocation.
+// Note: There's a small race window where another process could claim this slot,
+// but it's acceptable for informational purposes like --vm-name.
+func PeekNextSlotNumber() (int, error) {
+	if err := initGlobalStateDB(); err != nil {
+		return 0, err
+	}
+
+	// Clean up stale slots first
+	if err := CleanupStaleSlots(); err != nil {
+		return 0, fmt.Errorf("failed to cleanup stale slots: %w", err)
+	}
+
+	db, err := sql.Open("sqlite3", GlobalStateDBPath)
+	if err != nil {
+		return 0, fmt.Errorf("failed to open global state DB: %w", err)
+	}
+	defer db.Close()
+
+	// Find next available slot (1-254)
+	for slot := 1; slot <= MaxVMSlots; slot++ {
+		var exists int
+		err := db.QueryRow("SELECT COUNT(*) FROM vm_slots WHERE slot_number = ?", slot).Scan(&exists)
+		if err != nil {
+			return 0, fmt.Errorf("failed to check slot availability: %w", err)
+		}
+
+		if exists == 0 {
+			return slot, nil
+		}
+	}
+
+	return 0, fmt.Errorf("no available VM slots (maximum %d VMs running)", MaxVMSlots)
+}
+
 // AllocateVMSlot finds and claims the next available slot
 func AllocateVMSlot(params VMSlotParams) (*VMSlot, error) {
 	if err := initGlobalStateDB(); err != nil {
