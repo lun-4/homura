@@ -13,6 +13,32 @@ import (
 	"time"
 )
 
+// MinVirtiofsFileDescriptors is the minimum file descriptor hard limit required for virtiofsd
+// virtiofsd tries to set its limit to 1,000,000 and will warn if it can't
+const MinVirtiofsFileDescriptors = 100000
+
+// checkFileDescriptorLimit checks if the current file descriptor hard limit is sufficient for virtiofsd
+func checkFileDescriptorLimit(minRequired uint64) error {
+	var rlimit syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rlimit); err != nil {
+		return fmt.Errorf("failed to get file descriptor limit: %w", err)
+	}
+
+	if rlimit.Max < minRequired {
+		return fmt.Errorf("file descriptor hard limit too low for virtiofsd: %d (need at least %d)\n\n"+
+			"virtiofsd requires a high file descriptor limit. To fix this:\n\n"+
+			"  Temporary (current session):\n"+
+			"    sudo prlimit --pid $$ --nofile=%d:%d\n\n"+
+			"  Permanent (add to /etc/security/limits.conf):\n"+
+			"    *  hard  nofile  %d\n"+
+			"    *  soft  nofile  %d\n\n"+
+			"  Then log out and back in, or start a new shell.",
+			rlimit.Max, minRequired, minRequired, minRequired, minRequired, minRequired)
+	}
+
+	return nil
+}
+
 // VM represents a running homura VM instance
 type VM struct {
 	WorkDir       string        // Current working directory
@@ -137,6 +163,12 @@ func NewVM(shareMode ShareMode) (*VM, error) {
 	// Start filesystem sharing daemon based on mode
 	switch shareMode {
 	case ShareModeVirtioFS:
+		// Check file descriptor limit before starting virtiofsd
+		if err := checkFileDescriptorLimit(MinVirtiofsFileDescriptors); err != nil {
+			os.RemoveAll(stateDir)
+			return nil, err
+		}
+
 		// Start virtiofsd
 		slog.Info("Starting virtiofsd", "workdir", workDir)
 
