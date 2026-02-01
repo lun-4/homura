@@ -45,12 +45,15 @@ RUN sed -i 's/^#rc_sys=.*/rc_sys=""/' /etc/rc.conf
 # Disable all TTYs - we use SSH only, no console login needed
 RUN sed -i '/^tty[0-9]/d' /etc/inittab
 
-# Add ~/.local/bin to PATH for all shells
-RUN echo 'export PATH="$HOME/.local/bin:$PATH"' >> /etc/profile
+# Add ~/.local/bin to PATH and set high file descriptor limit for all shells
+# (default 1024 is too low for many tools)
+RUN echo 'export PATH="$HOME/.local/bin:$PATH"' >> /etc/profile && \
+    echo 'ulimit -n 524288' >> /etc/profile
 
-# Add ~/.local/bin to PATH for fish shell
+# Add ~/.local/bin to PATH and set file descriptor limit for fish shell
 RUN mkdir -p /root/.config/fish && \
-    echo 'set -gx PATH $HOME/.local/bin $PATH' >> /root/.config/fish/config.fish
+    echo 'set -gx PATH $HOME/.local/bin $PATH' >> /root/.config/fish/config.fish && \
+    echo 'ulimit -n 524288' >> /root/.config/fish/config.fish
 
 # Build and install 9pvm-request
 COPY 9pvm-request /tmp/9pvm-request

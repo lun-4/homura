@@ -30,4 +30,5 @@ package vm
 // 20 - Update 9pvm-request to support virtiofs mode and display deny reasons
 // 21 - 9pvm-request: require absolute paths, strip /mnt/host prefix, add -h help
 // 22 - Update virtiofsd binary
-const VMImplementationVersion = 22
+// 23 - Increase file descriptor limit to 524288 (default 1024 too low)
+const VMImplementationVersion = 23
