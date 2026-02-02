@@ -58,6 +58,8 @@ homura rm
 
 ## `homura vm`
 
+**NOTE** linux only atm
+
 this is my freaky answer to sandboxing. there are issues with other sandboxing solutions
 (claude code's bwrap-based sandbox, the remote solutions like exe.dev/sprites/shellbox, etc)
 and i'll definitely write an article on it, but for now this is what i got.
