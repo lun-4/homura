@@ -35,11 +35,13 @@ homura clone fix-indices
 homura ls
 
 # running `homura clone` sets a default branch to the newly created one.
+# that means you don't need to give the branch name to some other commands (all optional)
 homura sh [branch]
 
 # in the inner shell, you can do whatever you want.
 # this is a git worktree sharing the same .git
 # and that includes running multiple copies of claude
+# (NOTE: merge conflict resolution between multiple agents is left as an exercise to the reader)
 claude
 
 # since it's a worktree, commits go to the same repo!
@@ -69,8 +71,10 @@ and i'll definitely write an article on it, but for now this is what i got.
 - download some kernel modules to make a functional VM
 - download and assemble an Alpine root fs with Docker
 - repackage it all together into an ext4 filesystem image
-- granular and dynamic mirroring of the host filesystem into the guest
-- make QEMU start with that image
+- granular and dynamic mirroring of the host filesystem into the guest (through virtiofs)
+  - because of virtiofs you need a high max fd limit. you can do this via a sudo shell alias, as an example `maxfd="sudo -E bash -c 'ulimit -n 524288 && exec sudo -Eu luna fish'"`
+- make QEMU start with that image with configured SSH and networking via `passt`
+  - each VM gets allocated a 10 port range starting from 10000, so the first VM gets 10000-10009 (10000 being SSH), next VM gets 10010-10019, etc
 
 the reasons why those are things that i have to do would be best described in an article, for now here's the setup
 
@@ -94,9 +98,7 @@ the reasons why those are things that i have to do would be best described in an
 | tar, gzip, cpio | archive tools | initramfs building |
 | openssh | `ssh-keygen` | VM host key generation |
 
-on arch: `pacman -S qemu-base passt docker e2fsprogs squashfs-tools kmod coreutils tar gzip cpio openssh`
-
-on debian/ubuntu: `apt install qemu-system-x86 passt docker.io e2fsprogs fuse2fs squashfs-tools kmod coreutils tar gzip cpio openssh-client`
+installing those packages on your distro is left as an exercise to the reader
 
 NOTE: by default, the current paths are shared with the guest:
 - `<cwd>:rw`
