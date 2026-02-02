@@ -1,14 +1,14 @@
 # homura
 
-claude code web for terminal addicts - uses git worktrees for fast, disk-efficient branching
+claude code web for terminal addicts w/ git worktrees
 
-(also because CC web does not support setting a docker image as env, and installing Elixir on it was a horror experience
-which also didn't work. so fuck it)
+problem statement: Claude Code on the Web UI sucks ass.
+0. the idea is cool! claude on "YOLO" mode while also being in the isolated env is very cool
+1. does not support setting a custom docker image as an environment, so everything must go through Claude
+2. impossible to install Elixir on it, it was insane horror and it didn't work
+3. very bad latency, general Anthropic UI jank
 
 _lol_
-
-**Note:** This version uses git worktrees internally for faster cloning and better disk efficiency.
-You don't need to know anything about worktrees - homura handles it for you!
 
 ## how get
 
