@@ -107,10 +107,14 @@ NOTE: by default, the current paths are shared with the guest:
 
 this lets claude to be run inside the system without having to re-login, a truly ephemeral vm with just what it needs.
 
+### building
+
 ```sh
+# while in homura, build if you haven't
 make
 
-# virtio is the default guest fs share type due to perf, you will need to build this
+# virtio is the default guest fs share type due to performance reasons, you will need to build this
+# you can clone this anywhere at the moment
 git clone https://github.com/lun-4/virtiofsd
 cd virtiofsd && cargo build --release --features http-control
 cp ./target/release/virtiofsd ~/.cache/homura/bin/virtiofsd
@@ -144,7 +148,9 @@ claude
 ### vm.json
 
 homura will check `~/.config/homura/vm.json` and you can define things here:
-- `allowPaths` is a list of file paths that will be automatically exposed to the guest on vm setup
+- `allowPaths` is a list of file paths that will be automatically exposed to the guest on vm setup.
+  - useful to put some tools or scripts to configure claude properly with yolo mode
+  - paths are `<host path>:<ro or rw>`
 - `snapshot` is a list of paths that will be snapshotted daily once you start a vm, this is a best-effort snapshot (archives the respective folders in a single .tar)
 
 ```json
@@ -166,6 +172,8 @@ homura will check `~/.config/homura/vm.json` and you can define things here:
 if you want to install more packages into the base image, create `~/.config/homura/Dockerfile.custom`, an example of mine:
 
 ```dockerfile
+# you'll need to change this whenever i change the base image to ensure the images are recent and prevent rebuilds
+# because of this you'll need to remove old images manually. i could add auto cleaning in the future though!
 FROM homura-vm-alpine-base:v23
 
 RUN apk add --no-cache vim tmux ripgrep
