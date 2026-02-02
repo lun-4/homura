@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/spf13/cobra"
 	"github.com/lun-4/homura/internal/commands"
+	"github.com/spf13/cobra"
 )
 
 var (
@@ -152,7 +152,7 @@ func init() {
 	rmCmd.Flags().BoolVarP(&forceFlag, "force", "f", false, "Force removal even with uncommitted changes")
 
 	// VM command flags
-	vmCmd.Flags().StringVar(&shareModeFlag, "share-mode", "9p",
+	vmCmd.Flags().StringVar(&shareModeFlag, "share-mode", "virtiofs",
 		"Filesystem sharing mode: '9p' (default, uses FUSE) or 'virtiofs' (uses kernel driver)")
 
 	rootCmd.AddCommand(cloneCmd)
