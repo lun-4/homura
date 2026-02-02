@@ -74,6 +74,30 @@ and i'll definitely write an article on it, but for now this is what i got.
 
 the reasons why those are things that i have to do would be best described in an article, for now here's the setup
 
+### requirements
+
+**system:**
+- Linux with KVM support (check with `ls /dev/kvm`)
+- internet access (to download Alpine components on first run)
+
+**packages:**
+| package | provides | notes |
+|---------|----------|-------|
+| qemu | `qemu-system-x86_64` | VM emulator |
+| passt | `passt` | userspace networking, no root needed |
+| docker or podman | `docker`/`podman` | image building (docker tested first) |
+| fuse2fs | `fuse2fs`, `fusermount` | ext4 FUSE mounting (usually in `e2fsprogs` or `fuse2fs`) |
+| e2fsprogs | `mke2fs`, `resize2fs` | ext4 filesystem tools |
+| squashfs-tools | `unsquashfs` | extract Alpine modules |
+| kmod | `depmod` | kernel module dependencies |
+| coreutils | GNU `truncate`, `cp` | sparse file creation |
+| tar, gzip, cpio | archive tools | initramfs building |
+| openssh | `ssh-keygen` | VM host key generation |
+
+on arch: `pacman -S qemu-base passt docker e2fsprogs squashfs-tools kmod coreutils tar gzip cpio openssh`
+
+on debian/ubuntu: `apt install qemu-system-x86 passt docker.io e2fsprogs fuse2fs squashfs-tools kmod coreutils tar gzip cpio openssh-client`
+
 NOTE: by default, the current paths are shared with the guest:
 - `<cwd>:rw`
 - `~/.claude.json:rw`
