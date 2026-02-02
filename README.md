@@ -15,7 +15,7 @@ _lol_
 ```sh
 git clone https://github.com/lun-4/homura
 cd homura
-go build -o homura ./cmd/homura
+make
 
 # do whatever you want
 mv ./homura ~/.local/bin
