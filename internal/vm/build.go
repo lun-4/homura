@@ -448,11 +448,7 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 		return fmt.Errorf("failed to read SSH public key: %w", err)
 	}
 
-	// Detect docker or podman
 	dockerCmd := "docker"
-	if _, err := exec.LookPath("podman"); err == nil {
-		dockerCmd = "podman"
-	}
 
 	// Clean up any stale containers from previous failed builds
 	cleanupStaleContainers(dockerCmd)
