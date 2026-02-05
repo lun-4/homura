@@ -35,12 +35,13 @@ RUN echo "homura-vm" > /etc/hostname
 
 # Install Claude Code
 RUN curl -fsSL https://claude.ai/install.sh | bash
+RUN ~/.local/bin/claude update
 
 # remove claude code files, make sure this install is clean
 # because we'll symlink with the host later
-RUN rm -rv ~/.claude
-RUN rm -v ~/.claude.json
-RUN rm -v ~/.claude.json.backup
+RUN rm -frv ~/.claude
+RUN rm -fv ~/.claude.json
+RUN rm -fv ~/.claude.json.backup
 
 # Force OpenRC to run in default mode (not container mode)
 # The rootfs is built in Docker, so /.dockerenv exists and OpenRC would detect [DOCKER]
