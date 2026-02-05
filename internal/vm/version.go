@@ -33,4 +33,5 @@ package vm
 // 23 - Increase file descriptor limit to 524288 (default 1024 too low)
 // 24 - Add Docker support: overlay, netfilter, bridge, veth kernel modules + boot script
 // 25 - Fix Docker module dependencies: add llc, stp, libcrc32c, crypto modules
-const VMImplementationVersion = 25
+// 26 - Add loop, dummy, and wireguard kernel modules
+const VMImplementationVersion = 26

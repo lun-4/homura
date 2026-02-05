@@ -984,6 +984,12 @@ echo "=== docker-modules.start finished at $(date) ==="
 				fmt.Sprintf("modules/%s/kernel/drivers/net/veth.ko", kver),
 				// TUN/TAP (useful for VPNs and some container networking)
 				fmt.Sprintf("modules/%s/kernel/drivers/net/tun.ko", kver),
+				// Loop device (mounting disk images)
+				fmt.Sprintf("modules/%s/kernel/drivers/block/loop.ko", kver),
+				// Dummy network interface (testing)
+				fmt.Sprintf("modules/%s/kernel/drivers/net/dummy.ko", kver),
+				// WireGuard VPN
+				fmt.Sprintf("modules/%s/kernel/drivers/net/wireguard", kver),
 				// Crypto modules (libcrc32c required by nf_conntrack)
 				fmt.Sprintf("modules/%s/kernel/lib", kver),
 				fmt.Sprintf("modules/%s/kernel/crypto", kver),
