@@ -78,5 +78,15 @@ RUN cd /tmp/9pfuse && \
 # We'll copy the fuse module from /lib/modules during build
 RUN apk add --no-cache fuse3 fuse3-libs
 
+# Install Docker dependencies (so `apk add docker` works cleanly)
+# - fuse-overlayfs: fallback storage driver when overlay kernel module isn't available
+# - iptables-legacy: Docker networking compatibility (nftables not supported in this kernel)
+RUN apk add --no-cache fuse-overlayfs iptables-legacy
+
+# Configure iptables to use legacy backend (required for Docker)
+# The nftables backend requires kernel modules we don't have
+RUN ln -sf /usr/sbin/iptables-legacy /usr/sbin/iptables && \
+    ln -sf /usr/sbin/ip6tables-legacy /usr/sbin/ip6tables
+
 # Enable local service for 9p mount
 RUN rc-update add local default

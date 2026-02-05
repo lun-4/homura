@@ -96,6 +96,38 @@ You can configure paths to be automatically exposed every time a VM starts by cr
 
 **Note:** The current working directory is always exposed as read-write, regardless of this config. The `allowPaths` setting adds *additional* persistent paths.
 
+## Docker Support
+
+Docker is supported inside homura VMs. The VM includes all necessary kernel modules and dependencies.
+
+### Quick Start
+
+```bash
+# Inside the VM:
+apk add docker
+rc-service docker start
+docker run --rm alpine echo "Hello from Docker"
+```
+
+### Technical Details
+
+- **Storage driver:** Docker uses `overlay2` by default (kernel overlay module is loaded at boot)
+- **Fallback:** `fuse-overlayfs` is pre-installed if overlay isn't available
+- **Networking:** Uses `iptables-legacy` (nftables kernel support not included)
+- **Boot modules:** Required kernel modules (overlay, bridge, veth, netfilter) are automatically loaded via `/etc/local.d/01docker-modules.start`
+
+### Custom Dockerfile for Persistent Docker
+
+To have Docker pre-installed and auto-started in every VM, create `~/.config/homura/Dockerfile.custom`:
+
+```dockerfile
+FROM homura-vm-alpine-base:v25
+
+# Install and enable Docker
+RUN apk add --no-cache docker docker-cli-buildx && \
+    rc-update add docker default
+```
+
 ## 9p Filesystem Passthrough
 
 homura VMs support 9p filesystem passthrough, allowing the VM to access host directories securely.
@@ -159,6 +191,7 @@ The VM uses OpenRC's `local` service to run scripts at boot. Scripts are located
 
 | Script | Log File | Purpose |
 |--------|----------|---------|
+| `01docker-modules.start` | `/var/log/docker-modules.log` | Loads kernel modules for Docker (overlay, bridge, veth, netfilter) |
 | `9pmount.start` | `/var/log/9pmount.log` | Mounts 9p FUSE filesystem at `/mnt/host`, symlinks `~/.claude` and `~/.claude.json` from host |
 | `swap.start` | `/var/log/swap.log` | Creates and enables 1GB swap file at `/var/swap` |
 
@@ -166,6 +199,7 @@ The VM uses OpenRC's `local` service to run scripts at boot. Scripts are located
 
 ```bash
 # Inside VM, check boot script logs:
+cat /var/log/docker-modules.log
 cat /var/log/9pmount.log
 cat /var/log/swap.log
 ```

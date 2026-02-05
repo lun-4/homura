@@ -31,4 +31,6 @@ package vm
 // 21 - 9pvm-request: require absolute paths, strip /mnt/host prefix, add -h help
 // 22 - Update virtiofsd binary
 // 23 - Increase file descriptor limit to 524288 (default 1024 too low)
-const VMImplementationVersion = 23
+// 24 - Add Docker support: overlay, netfilter, bridge, veth kernel modules + boot script
+// 25 - Fix Docker module dependencies: add llc, stp, libcrc32c, crypto modules
+const VMImplementationVersion = 25

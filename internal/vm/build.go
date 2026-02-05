@@ -658,7 +658,7 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 	slog.Info("Creating ext4 image")
 	tmpRootfs := paths.RootfsPath + ".tmp"
 
-	cmd = exec.Command("truncate", "-s", "1536M", tmpRootfs) // 1.5GB
+	cmd = exec.Command("truncate", "-s", "2048M", tmpRootfs) // 2GB
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -877,6 +877,53 @@ echo "=== swap.start finished at $(date) ==="
 		return fmt.Errorf("failed to write swap script: %w", err)
 	}
 
+	// Create Docker modules loading script (runs early, hence 01 prefix)
+	dockerModulesScript := `#!/bin/sh
+# Load kernel modules required for Docker/container support
+# This script runs early in boot to ensure modules are available before Docker starts
+# Module load order matters due to dependencies!
+
+exec >> /var/log/docker-modules.log 2>&1
+echo "=== docker-modules.start running at $(date) ==="
+
+# Overlay filesystem (Docker's preferred storage driver)
+modprobe overlay && echo "Loaded: overlay"
+
+# Crypto modules (required by nf_conntrack)
+modprobe crc32c_generic && echo "Loaded: crc32c_generic"
+modprobe crc32c_intel 2>/dev/null && echo "Loaded: crc32c_intel (hardware)"
+modprobe libcrc32c && echo "Loaded: libcrc32c"
+
+# LLC and STP protocols (required by bridge)
+modprobe llc && echo "Loaded: llc"
+modprobe stp && echo "Loaded: stp"
+
+# Bridge networking (Docker bridge network)
+modprobe bridge && echo "Loaded: bridge"
+modprobe br_netfilter && echo "Loaded: br_netfilter"
+
+# Virtual ethernet pairs (container networking)
+modprobe veth && echo "Loaded: veth"
+
+# Netfilter/iptables modules (Docker networking/NAT)
+modprobe nf_conntrack && echo "Loaded: nf_conntrack"
+modprobe nf_nat && echo "Loaded: nf_nat"
+modprobe nf_defrag_ipv4 && echo "Loaded: nf_defrag_ipv4"
+modprobe x_tables && echo "Loaded: x_tables"
+modprobe ip_tables && echo "Loaded: ip_tables"
+modprobe iptable_nat && echo "Loaded: iptable_nat"
+modprobe iptable_filter && echo "Loaded: iptable_filter"
+modprobe xt_MASQUERADE && echo "Loaded: xt_MASQUERADE"
+modprobe xt_addrtype && echo "Loaded: xt_addrtype"
+modprobe xt_conntrack && echo "Loaded: xt_conntrack"
+
+echo "=== docker-modules.start finished at $(date) ==="
+`
+	dockerModulesScriptPath := filepath.Join(localDDir, "01docker-modules.start")
+	if err := os.WriteFile(dockerModulesScriptPath, []byte(dockerModulesScript), 0755); err != nil {
+		return fmt.Errorf("failed to write docker modules script: %w", err)
+	}
+
 	// Write builtin CLAUDE.md for VM
 	claudeConfigDir := filepath.Join(mountDir, "etc", "homura", "claude-config")
 	if err := os.MkdirAll(claudeConfigDir, 0755); err != nil {
@@ -887,17 +934,13 @@ echo "=== swap.start finished at $(date) ==="
 		return fmt.Errorf("failed to write builtin CLAUDE.md: %w", err)
 	}
 
-	// Copy FUSE kernel module from modloop to rootfs
-	// Extract FUSE module to temp location
-	slog.Info("Copying FUSE kernel module to rootfs")
-	tmpModuleDir, err := os.MkdirTemp("", "homura-fuse-module-*")
+	// Copy kernel modules from modloop to rootfs (FUSE, overlay, netfilter for Docker, etc.)
+	slog.Info("Copying kernel modules to rootfs")
+	tmpModuleDir, err := os.MkdirTemp("", "homura-modules-*")
 	if err == nil {
 		defer os.RemoveAll(tmpModuleDir)
 
-		// Extract fuse module from modloop
-		// Detect kernel version - extract from vmlinuz filename
-		// vmlinuz-virt -> we need the version from /lib/modules in initramfs
-		// For simplicity, we'll list the modloop and find the version
+		// Detect kernel version from modloop
 		cmd := exec.Command("unsquashfs", "-ll", paths.ModloopPath)
 		output, err := cmd.Output()
 		var kver string
@@ -919,25 +962,84 @@ echo "=== swap.start finished at $(date) ==="
 		}
 
 		if kver != "" {
-			fusePath := fmt.Sprintf("modules/%s/kernel/fs/fuse", kver)
-			cmd := exec.Command("unsquashfs", "-f", "-d", tmpModuleDir, paths.ModloopPath, fusePath)
-			if cmd.Run() == nil {
-				// Copy extracted FUSE module to rootfs
-				srcFuse := filepath.Join(tmpModuleDir, fusePath)
-				dstFuse := filepath.Join(mountDir, "lib", "modules", kver, "kernel", "fs", "fuse")
-				if err := os.MkdirAll(dstFuse, 0755); err == nil {
-					copyTree(srcFuse, dstFuse)
-					slog.Info("FUSE module copied to rootfs", "version", kver)
+			// List of kernel modules to extract for Docker/container support
+			modulePaths := []string{
+				// FUSE filesystem (for 9pfuse)
+				fmt.Sprintf("modules/%s/kernel/fs/fuse", kver),
+				// Overlay filesystem (Docker storage driver)
+				fmt.Sprintf("modules/%s/kernel/fs/overlayfs", kver),
+				// Netfilter core (required for iptables)
+				fmt.Sprintf("modules/%s/kernel/net/netfilter", kver),
+				// IPv4 netfilter (ip_tables, iptable_nat, etc.)
+				fmt.Sprintf("modules/%s/kernel/net/ipv4/netfilter", kver),
+				// IPv6 netfilter (for Docker IPv6 support)
+				fmt.Sprintf("modules/%s/kernel/net/ipv6/netfilter", kver),
+				// Bridge module (Docker networking)
+				fmt.Sprintf("modules/%s/kernel/net/bridge", kver),
+				// 802.1 protocols (STP - required by bridge)
+				fmt.Sprintf("modules/%s/kernel/net/802", kver),
+				// LLC protocol (required by bridge/STP)
+				fmt.Sprintf("modules/%s/kernel/net/llc", kver),
+				// Virtual ethernet (Docker container networking)
+				fmt.Sprintf("modules/%s/kernel/drivers/net/veth.ko", kver),
+				// TUN/TAP (useful for VPNs and some container networking)
+				fmt.Sprintf("modules/%s/kernel/drivers/net/tun.ko", kver),
+				// Crypto modules (libcrc32c required by nf_conntrack)
+				fmt.Sprintf("modules/%s/kernel/lib", kver),
+				fmt.Sprintf("modules/%s/kernel/crypto", kver),
+				// x86 hardware-accelerated crypto (crc32c-intel)
+				fmt.Sprintf("modules/%s/kernel/arch/x86/crypto", kver),
+			}
 
-					// Run depmod to update module dependencies
-					slog.Info("Running depmod to update module dependencies")
-					depmodCmd := exec.Command("depmod", "-b", mountDir, kver)
-					depmodCmd.Stdout = os.Stderr
-					depmodCmd.Stderr = os.Stderr
-					if err := depmodCmd.Run(); err != nil {
-						slog.Warn("depmod failed", "error", err)
-					}
-				}
+			// Extract all modules
+			for _, modPath := range modulePaths {
+				cmd := exec.Command("unsquashfs", "-f", "-d", tmpModuleDir, paths.ModloopPath, modPath)
+				cmd.Run() // Ignore errors, some paths might not exist
+			}
+
+			// Copy extracted modules to rootfs
+			srcModules := filepath.Join(tmpModuleDir, "modules", kver, "kernel")
+			dstModules := filepath.Join(mountDir, "lib", "modules", kver, "kernel")
+
+			// Copy fs modules (fuse, overlayfs)
+			if err := copyTree(filepath.Join(srcModules, "fs"), filepath.Join(dstModules, "fs")); err != nil {
+				slog.Warn("Failed to copy fs modules", "error", err)
+			}
+
+			// Copy net modules (netfilter, bridge, 802, llc)
+			if err := copyTree(filepath.Join(srcModules, "net"), filepath.Join(dstModules, "net")); err != nil {
+				slog.Warn("Failed to copy net modules", "error", err)
+			}
+
+			// Copy driver modules (veth, tun)
+			if err := copyTree(filepath.Join(srcModules, "drivers"), filepath.Join(dstModules, "drivers")); err != nil {
+				slog.Warn("Failed to copy driver modules", "error", err)
+			}
+
+			// Copy lib modules (libcrc32c)
+			if err := copyTree(filepath.Join(srcModules, "lib"), filepath.Join(dstModules, "lib")); err != nil {
+				slog.Warn("Failed to copy lib modules", "error", err)
+			}
+
+			// Copy crypto modules (crc32c_generic)
+			if err := copyTree(filepath.Join(srcModules, "crypto"), filepath.Join(dstModules, "crypto")); err != nil {
+				slog.Warn("Failed to copy crypto modules", "error", err)
+			}
+
+			// Copy arch/x86/crypto modules (crc32c-intel hardware acceleration)
+			if err := copyTree(filepath.Join(srcModules, "arch"), filepath.Join(dstModules, "arch")); err != nil {
+				slog.Warn("Failed to copy arch modules", "error", err)
+			}
+
+			slog.Info("Kernel modules copied to rootfs", "version", kver)
+
+			// Run depmod to update module dependencies
+			slog.Info("Running depmod to update module dependencies")
+			depmodCmd := exec.Command("depmod", "-b", mountDir, kver)
+			depmodCmd.Stdout = os.Stderr
+			depmodCmd.Stderr = os.Stderr
+			if err := depmodCmd.Run(); err != nil {
+				slog.Warn("depmod failed", "error", err)
 			}
 		}
 	}
