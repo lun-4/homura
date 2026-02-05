@@ -3,6 +3,10 @@ FROM alpine:3.21
 RUN apk add --no-cache openrc openssh curl git fish htop bash helix nodejs go python3 cmake \
     && sed -i 's|^root:.*:/bin/sh$|root:x:0:0:root:/root:/usr/bin/fish|' /etc/passwd
 
+# get latest go version
+RUN go install golang.org/dl/go1.25.5@latest
+RUN ~/go/bin/go1.25.5 download
+
 # Enable services for boot
 RUN rc-update add sshd default
 RUN rc-update add devfs boot
