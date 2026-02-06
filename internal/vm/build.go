@@ -333,11 +333,7 @@ func buildInitramfs(paths *ImagePaths) error {
 		fmt.Sprintf("modules/%s/kernel/drivers/virtio", kver),
 		fmt.Sprintf("modules/%s/kernel/drivers/block/virtio_blk.ko", kver),
 		fmt.Sprintf("modules/%s/kernel/drivers/net/virtio_net.ko", kver),
-		// 9p filesystem modules
-		fmt.Sprintf("modules/%s/kernel/net/9p", kver),
-		fmt.Sprintf("modules/%s/kernel/fs/9p", kver),
-		fmt.Sprintf("modules/%s/kernel/fs/netfs", kver),
-		// FUSE for 9pfuse driver
+		// FUSE for 9pfuse driver (kernel 9p not used - homura uses FUSE-based 9pfuse)
 		fmt.Sprintf("modules/%s/kernel/fs/fuse", kver),
 	}
 
@@ -364,13 +360,6 @@ func buildInitramfs(paths *ImagePaths) error {
 		filepath.Join(newDir, "lib", "modules", kver, "kernel", "drivers", "net"),
 	); err != nil {
 		slog.Warn("Failed to copy net modules", "error", err)
-	}
-	// Copy 9p network modules
-	if err := copyTree(
-		filepath.Join(modloopMount, "modules", kver, "kernel", "net", "9p"),
-		filepath.Join(newDir, "lib", "modules", kver, "kernel", "net", "9p"),
-	); err != nil {
-		slog.Warn("Failed to copy 9p net modules", "error", err)
 	}
 
 	// Run depmod

@@ -34,4 +34,5 @@ package vm
 // 24 - Add Docker support: overlay, netfilter, bridge, veth kernel modules + boot script
 // 25 - Fix Docker module dependencies: add llc, stp, libcrc32c, crypto modules
 // 26 - Add loop, dummy, and wireguard kernel modules
-const VMImplementationVersion = 26
+// 27 - Remove unused kernel 9p modules from initramfs (homura uses FUSE-based 9pfuse)
+const VMImplementationVersion = 27
