@@ -427,9 +427,14 @@ func cleanupStaleContainers(dockerCmd string) {
 	}
 }
 
-// buildRootfs creates an ext4 rootfs image using Docker and fuse2fs
+// buildRootfs creates an ext4 rootfs image using Docker and mke2fs -d
 func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 	slog.Info("Building rootfs image")
+
+	// Check for fakeroot (required for correct ownership in ext4 image)
+	if _, err := exec.LookPath("fakeroot"); err != nil {
+		return fmt.Errorf("fakeroot required but not found: install via your package manager")
+	}
 
 	// Read SSH public key
 	sshPubKey, err := os.ReadFile(sshPubKeyPath)
@@ -643,84 +648,83 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 	}
 	tarFile.Close()
 
-	// Create ext4 image
-	slog.Info("Creating ext4 image")
-	tmpRootfs := paths.RootfsPath + ".tmp"
-
-	cmd = exec.Command("truncate", "-s", "2048M", tmpRootfs) // 2GB
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("truncate failed: %w", err)
-	}
-
-	cmd = exec.Command("mke2fs", "-q", "-t", "ext4", "-O", "^metadata_csum,^64bit", "-L", "rootfs", tmpRootfs)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		os.Remove(tmpRootfs)
-		return fmt.Errorf("mke2fs failed: %w", err)
-	}
-
-	// Mount with fuse2fs and extract tar
-	slog.Info("Mounting image and extracting rootfs")
-	mountDir, err := os.MkdirTemp("", "homura-mount-*")
+	// Extract kernel modules from modloop (this runs as current user, before fakeroot)
+	slog.Info("Extracting kernel modules from modloop")
+	tmpModuleDir, err := os.MkdirTemp("", "homura-modules-*")
 	if err != nil {
-		os.Remove(tmpRootfs)
-		return err
+		return fmt.Errorf("failed to create temp module dir: %w", err)
 	}
-	defer os.RemoveAll(mountDir)
+	defer os.RemoveAll(tmpModuleDir)
 
-	// Mount
-	cmd = exec.Command("fuse2fs", "-o", "fakeroot,rw", tmpRootfs, mountDir)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		os.Remove(tmpRootfs)
-		return fmt.Errorf("fuse2fs mount failed: %w", err)
-	}
-	defer exec.Command("fusermount", "-u", mountDir).Run()
-
-	// Extract tar
-	tarFile2, err := os.Open(tarPath)
-	if err != nil {
-		os.Remove(tmpRootfs)
-		return err
-	}
-	defer tarFile2.Close()
-
-	cmd = exec.Command("tar", "--same-owner", "-xf", "-", "-C", mountDir)
-	cmd.Stdin = tarFile2
-	cmd.Stdout = os.Stderr // Show tar output
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		os.Remove(tmpRootfs)
-		return fmt.Errorf("tar extract failed: %w", err)
+	// Detect kernel version from modloop
+	cmd = exec.Command("unsquashfs", "-ll", paths.ModloopPath)
+	output, err := cmd.Output()
+	var kver string
+	if err == nil {
+		lines := strings.Split(string(output), "\n")
+		for _, line := range lines {
+			if strings.Contains(line, "modules/") && strings.Contains(line, "-virt/") {
+				parts := strings.Split(line, "modules/")
+				if len(parts) > 1 {
+					verParts := strings.Split(parts[1], "/")
+					if len(verParts) > 0 {
+						kver = verParts[0]
+						break
+					}
+				}
+			}
+		}
 	}
 
-	// Remove Docker/container markers so OpenRC doesn't detect container mode
-	os.Remove(filepath.Join(mountDir, ".dockerenv"))
-	os.RemoveAll(filepath.Join(mountDir, "run", ".containerenv"))
+	if kver != "" {
+		modulePaths := []string{
+			fmt.Sprintf("modules/%s/kernel/fs/fuse", kver),
+			fmt.Sprintf("modules/%s/kernel/fs/overlayfs", kver),
+			fmt.Sprintf("modules/%s/kernel/net/netfilter", kver),
+			fmt.Sprintf("modules/%s/kernel/net/ipv4/netfilter", kver),
+			fmt.Sprintf("modules/%s/kernel/net/ipv6/netfilter", kver),
+			fmt.Sprintf("modules/%s/kernel/net/bridge", kver),
+			fmt.Sprintf("modules/%s/kernel/net/802", kver),
+			fmt.Sprintf("modules/%s/kernel/net/llc", kver),
+			fmt.Sprintf("modules/%s/kernel/drivers/net/veth.ko", kver),
+			fmt.Sprintf("modules/%s/kernel/drivers/net/tun.ko", kver),
+			fmt.Sprintf("modules/%s/kernel/drivers/block/loop.ko", kver),
+			fmt.Sprintf("modules/%s/kernel/drivers/net/dummy.ko", kver),
+			fmt.Sprintf("modules/%s/kernel/drivers/net/wireguard", kver),
+			fmt.Sprintf("modules/%s/kernel/lib", kver),
+			fmt.Sprintf("modules/%s/kernel/crypto", kver),
+			fmt.Sprintf("modules/%s/kernel/arch/x86/crypto", kver),
+		}
 
-	// Add DNS config
-	resolvPath := filepath.Join(mountDir, "etc", "resolv.conf")
-	if err := os.WriteFile(resolvPath, []byte("nameserver 1.1.1.1\nnameserver 8.8.8.8\n"), 0644); err != nil {
-		slog.Warn("Failed to write resolv.conf", "error", err)
+		for _, modPath := range modulePaths {
+			cmd := exec.Command("unsquashfs", "-f", "-d", tmpModuleDir, paths.ModloopPath, modPath)
+			cmd.Run() // Ignore errors, some paths might not exist
+		}
+		slog.Info("Kernel modules extracted", "version", kver)
 	}
 
-	// Add hosts file
-	hostsPath := filepath.Join(mountDir, "etc", "hosts")
-	if err := os.WriteFile(hostsPath, []byte("127.0.0.1\tlocalhost homura-vm\n::1\t\tlocalhost homura-vm\n"), 0644); err != nil {
-		slog.Warn("Failed to write hosts", "error", err)
+	// Write config files to inject directory (native filesystem, fast)
+	injectDir := filepath.Join(tmpDir, "inject")
+	if err := os.MkdirAll(injectDir, 0755); err != nil {
+		return fmt.Errorf("failed to create inject dir: %w", err)
 	}
 
-	// Set hostname (Docker export sometimes loses this)
-	hostnamePath := filepath.Join(mountDir, "etc", "hostname")
-	if err := os.WriteFile(hostnamePath, []byte("homura-vm\n"), 0644); err != nil {
-		slog.Warn("Failed to write hostname", "error", err)
+	// resolv.conf
+	if err := os.WriteFile(filepath.Join(injectDir, "resolv.conf"), []byte("nameserver 1.1.1.1\nnameserver 8.8.8.8\n"), 0644); err != nil {
+		return fmt.Errorf("failed to write resolv.conf: %w", err)
 	}
 
-	// Create filesystem mount script that handles both virtiofs and 9p modes
+	// hosts
+	if err := os.WriteFile(filepath.Join(injectDir, "hosts"), []byte("127.0.0.1\tlocalhost homura-vm\n::1\t\tlocalhost homura-vm\n"), 0644); err != nil {
+		return fmt.Errorf("failed to write hosts: %w", err)
+	}
+
+	// hostname
+	if err := os.WriteFile(filepath.Join(injectDir, "hostname"), []byte("homura-vm\n"), 0644); err != nil {
+		return fmt.Errorf("failed to write hostname: %w", err)
+	}
+
+	// 9pmount.start (filesystem mount script)
 	ninepScript := `#!/bin/sh
 # Auto-mount filesystem (virtiofs or 9p via FUSE) based on kernel params
 
@@ -828,16 +832,11 @@ fi
 
 echo "=== fsmount.start finished at $(date) ==="
 `
-	localDDir := filepath.Join(mountDir, "etc", "local.d")
-	if err := os.MkdirAll(localDDir, 0755); err != nil {
-		return fmt.Errorf("failed to create /etc/local.d: %w", err)
-	}
-	ninepScriptPath := filepath.Join(localDDir, "9pmount.start")
-	if err := os.WriteFile(ninepScriptPath, []byte(ninepScript), 0755); err != nil {
-		return fmt.Errorf("failed to write 9p mount script: %w", err)
+	if err := os.WriteFile(filepath.Join(injectDir, "9pmount.start"), []byte(ninepScript), 0755); err != nil {
+		return fmt.Errorf("failed to write 9pmount.start: %w", err)
 	}
 
-	// Create swap file setup script
+	// swap.start
 	swapScript := `#!/bin/sh
 # Create and enable swap file on boot
 
@@ -861,12 +860,11 @@ swapon "$SWAPFILE" 2>/dev/null && echo "Swap enabled: $SWAPFILE"
 
 echo "=== swap.start finished at $(date) ==="
 `
-	swapScriptPath := filepath.Join(localDDir, "swap.start")
-	if err := os.WriteFile(swapScriptPath, []byte(swapScript), 0755); err != nil {
-		return fmt.Errorf("failed to write swap script: %w", err)
+	if err := os.WriteFile(filepath.Join(injectDir, "swap.start"), []byte(swapScript), 0755); err != nil {
+		return fmt.Errorf("failed to write swap.start: %w", err)
 	}
 
-	// Create Docker modules loading script (runs early, hence 01 prefix)
+	// 01docker-modules.start
 	dockerModulesScript := `#!/bin/sh
 # Load kernel modules required for Docker/container support
 # This script runs early in boot to ensure modules are available before Docker starts
@@ -908,147 +906,121 @@ modprobe xt_conntrack && echo "Loaded: xt_conntrack"
 
 echo "=== docker-modules.start finished at $(date) ==="
 `
-	dockerModulesScriptPath := filepath.Join(localDDir, "01docker-modules.start")
-	if err := os.WriteFile(dockerModulesScriptPath, []byte(dockerModulesScript), 0755); err != nil {
-		return fmt.Errorf("failed to write docker modules script: %w", err)
+	if err := os.WriteFile(filepath.Join(injectDir, "01docker-modules.start"), []byte(dockerModulesScript), 0755); err != nil {
+		return fmt.Errorf("failed to write 01docker-modules.start: %w", err)
 	}
 
-	// Write builtin CLAUDE.md for VM
-	claudeConfigDir := filepath.Join(mountDir, "etc", "homura", "claude-config")
-	if err := os.MkdirAll(claudeConfigDir, 0755); err != nil {
-		return fmt.Errorf("failed to create claude-config dir: %w", err)
+	// CLAUDE.md
+	claudeConfigInjectDir := filepath.Join(injectDir, "claude-config")
+	if err := os.MkdirAll(claudeConfigInjectDir, 0755); err != nil {
+		return fmt.Errorf("failed to create claude-config inject dir: %w", err)
 	}
-	claudeMdPath := filepath.Join(claudeConfigDir, "CLAUDE.md")
-	if err := os.WriteFile(claudeMdPath, []byte(builtinClaudeMd), 0644); err != nil {
-		return fmt.Errorf("failed to write builtin CLAUDE.md: %w", err)
+	if err := os.WriteFile(filepath.Join(claudeConfigInjectDir, "CLAUDE.md"), []byte(builtinClaudeMd), 0644); err != nil {
+		return fmt.Errorf("failed to write CLAUDE.md: %w", err)
 	}
 
-	// Copy kernel modules from modloop to rootfs (FUSE, overlay, netfilter for Docker, etc.)
-	slog.Info("Copying kernel modules to rootfs")
-	tmpModuleDir, err := os.MkdirTemp("", "homura-modules-*")
-	if err == nil {
-		defer os.RemoveAll(tmpModuleDir)
+	// Build the staging + image creation script to run under fakeroot
+	slog.Info("Creating ext4 image with fakeroot + mke2fs -d")
+	stagingDir := filepath.Join(tmpDir, "staging")
+	if err := os.MkdirAll(stagingDir, 0755); err != nil {
+		return fmt.Errorf("failed to create staging dir: %w", err)
+	}
 
-		// Detect kernel version from modloop
-		cmd := exec.Command("unsquashfs", "-ll", paths.ModloopPath)
-		output, err := cmd.Output()
-		var kver string
-		if err == nil {
-			// Parse output to find modules/VERSION/ directory
-			lines := strings.Split(string(output), "\n")
-			for _, line := range lines {
-				if strings.Contains(line, "modules/") && strings.Contains(line, "-virt/") {
-					parts := strings.Split(line, "modules/")
-					if len(parts) > 1 {
-						verParts := strings.Split(parts[1], "/")
-						if len(verParts) > 0 {
-							kver = verParts[0]
-							break
-						}
-					}
-				}
+	tmpRootfs := paths.RootfsPath + ".tmp"
+
+	// Build the fakeroot script
+	// Use kver="" if we couldn't detect it to skip module copying
+	fakerootScript := fmt.Sprintf(`set -e
+
+# 1. Extract Docker tar into staging dir
+tar --same-owner -xf "%s" -C "%s"
+
+# 2. Remove Docker markers
+rm -f "%s/.dockerenv"
+rm -rf "%s/run/.containerenv"
+
+# 3. Copy injected config files
+cp "%s/resolv.conf" "%s/etc/resolv.conf"
+cp "%s/hosts" "%s/etc/hosts"
+cp "%s/hostname" "%s/etc/hostname"
+
+mkdir -p "%s/etc/local.d"
+cp "%s/9pmount.start" "%s/etc/local.d/9pmount.start"
+chmod 755 "%s/etc/local.d/9pmount.start"
+cp "%s/swap.start" "%s/etc/local.d/swap.start"
+chmod 755 "%s/etc/local.d/swap.start"
+cp "%s/01docker-modules.start" "%s/etc/local.d/01docker-modules.start"
+chmod 755 "%s/etc/local.d/01docker-modules.start"
+
+mkdir -p "%s/etc/homura/claude-config"
+cp "%s/CLAUDE.md" "%s/etc/homura/claude-config/CLAUDE.md"
+`,
+		tarPath, stagingDir,
+		stagingDir,
+		stagingDir,
+		injectDir, stagingDir,
+		injectDir, stagingDir,
+		injectDir, stagingDir,
+		stagingDir,
+		injectDir, stagingDir,
+		stagingDir,
+		injectDir, stagingDir,
+		stagingDir,
+		injectDir, stagingDir,
+		stagingDir,
+		stagingDir,
+		claudeConfigInjectDir, stagingDir,
+	)
+
+	// Add kernel module copying if we have modules
+	if kver != "" {
+		modulesSrc := filepath.Join(tmpModuleDir, "modules", kver, "kernel")
+		modulesDst := fmt.Sprintf("%s/lib/modules/%s/kernel", stagingDir, kver)
+
+		fakerootScript += fmt.Sprintf(`
+# 4. Copy kernel modules
+mkdir -p "%s"
+`, modulesDst)
+
+		for _, subdir := range []string{"fs", "net", "drivers", "lib", "crypto", "arch"} {
+			src := filepath.Join(modulesSrc, subdir)
+			dst := filepath.Join(modulesDst, subdir)
+			// Only add copy if source exists
+			if _, err := os.Stat(src); err == nil {
+				fakerootScript += fmt.Sprintf(`cp -a "%s" "%s" 2>/dev/null || true
+`, src, dst)
 			}
 		}
 
-		if kver != "" {
-			// List of kernel modules to extract for Docker/container support
-			modulePaths := []string{
-				// FUSE filesystem (for 9pfuse)
-				fmt.Sprintf("modules/%s/kernel/fs/fuse", kver),
-				// Overlay filesystem (Docker storage driver)
-				fmt.Sprintf("modules/%s/kernel/fs/overlayfs", kver),
-				// Netfilter core (required for iptables)
-				fmt.Sprintf("modules/%s/kernel/net/netfilter", kver),
-				// IPv4 netfilter (ip_tables, iptable_nat, etc.)
-				fmt.Sprintf("modules/%s/kernel/net/ipv4/netfilter", kver),
-				// IPv6 netfilter (for Docker IPv6 support)
-				fmt.Sprintf("modules/%s/kernel/net/ipv6/netfilter", kver),
-				// Bridge module (Docker networking)
-				fmt.Sprintf("modules/%s/kernel/net/bridge", kver),
-				// 802.1 protocols (STP - required by bridge)
-				fmt.Sprintf("modules/%s/kernel/net/802", kver),
-				// LLC protocol (required by bridge/STP)
-				fmt.Sprintf("modules/%s/kernel/net/llc", kver),
-				// Virtual ethernet (Docker container networking)
-				fmt.Sprintf("modules/%s/kernel/drivers/net/veth.ko", kver),
-				// TUN/TAP (useful for VPNs and some container networking)
-				fmt.Sprintf("modules/%s/kernel/drivers/net/tun.ko", kver),
-				// Loop device (mounting disk images)
-				fmt.Sprintf("modules/%s/kernel/drivers/block/loop.ko", kver),
-				// Dummy network interface (testing)
-				fmt.Sprintf("modules/%s/kernel/drivers/net/dummy.ko", kver),
-				// WireGuard VPN
-				fmt.Sprintf("modules/%s/kernel/drivers/net/wireguard", kver),
-				// Crypto modules (libcrc32c required by nf_conntrack)
-				fmt.Sprintf("modules/%s/kernel/lib", kver),
-				fmt.Sprintf("modules/%s/kernel/crypto", kver),
-				// x86 hardware-accelerated crypto (crc32c-intel)
-				fmt.Sprintf("modules/%s/kernel/arch/x86/crypto", kver),
-			}
-
-			// Extract all modules
-			for _, modPath := range modulePaths {
-				cmd := exec.Command("unsquashfs", "-f", "-d", tmpModuleDir, paths.ModloopPath, modPath)
-				cmd.Run() // Ignore errors, some paths might not exist
-			}
-
-			// Copy extracted modules to rootfs
-			srcModules := filepath.Join(tmpModuleDir, "modules", kver, "kernel")
-			dstModules := filepath.Join(mountDir, "lib", "modules", kver, "kernel")
-
-			// Copy fs modules (fuse, overlayfs)
-			if err := copyTree(filepath.Join(srcModules, "fs"), filepath.Join(dstModules, "fs")); err != nil {
-				slog.Warn("Failed to copy fs modules", "error", err)
-			}
-
-			// Copy net modules (netfilter, bridge, 802, llc)
-			if err := copyTree(filepath.Join(srcModules, "net"), filepath.Join(dstModules, "net")); err != nil {
-				slog.Warn("Failed to copy net modules", "error", err)
-			}
-
-			// Copy driver modules (veth, tun)
-			if err := copyTree(filepath.Join(srcModules, "drivers"), filepath.Join(dstModules, "drivers")); err != nil {
-				slog.Warn("Failed to copy driver modules", "error", err)
-			}
-
-			// Copy lib modules (libcrc32c)
-			if err := copyTree(filepath.Join(srcModules, "lib"), filepath.Join(dstModules, "lib")); err != nil {
-				slog.Warn("Failed to copy lib modules", "error", err)
-			}
-
-			// Copy crypto modules (crc32c_generic)
-			if err := copyTree(filepath.Join(srcModules, "crypto"), filepath.Join(dstModules, "crypto")); err != nil {
-				slog.Warn("Failed to copy crypto modules", "error", err)
-			}
-
-			// Copy arch/x86/crypto modules (crc32c-intel hardware acceleration)
-			if err := copyTree(filepath.Join(srcModules, "arch"), filepath.Join(dstModules, "arch")); err != nil {
-				slog.Warn("Failed to copy arch modules", "error", err)
-			}
-
-			slog.Info("Kernel modules copied to rootfs", "version", kver)
-
-			// Run depmod to update module dependencies
-			slog.Info("Running depmod to update module dependencies")
-			depmodCmd := exec.Command("depmod", "-b", mountDir, kver)
-			depmodCmd.Stdout = os.Stderr
-			depmodCmd.Stderr = os.Stderr
-			if err := depmodCmd.Run(); err != nil {
-				slog.Warn("depmod failed", "error", err)
-			}
-		}
+		fakerootScript += fmt.Sprintf(`
+# 5. Run depmod
+depmod -b "%s" "%s" || true
+`, stagingDir, kver)
 	}
 
-	// Copy SSH host keys
-	if err := copyTree(paths.SSHHostKeysDir, filepath.Join(mountDir, "etc", "ssh")); err != nil {
-		slog.Warn("Failed to copy SSH host keys", "error", err)
+	// Add SSH host key copying
+	fakerootScript += fmt.Sprintf(`
+# 6. Copy SSH host keys
+cp -a "%s"/* "%s/etc/ssh/" 2>/dev/null || true
+
+# 7. Create the ext4 image in one shot
+mke2fs -q -t ext4 -O "^metadata_csum,^64bit" -E root_owner=0:0 -L rootfs -d "%s" "%s" 2048M
+`, paths.SSHHostKeysDir, stagingDir,
+		stagingDir, tmpRootfs,
+	)
+
+	// Write the script to a temp file and run it under fakeroot
+	scriptPath := filepath.Join(tmpDir, "build-rootfs.sh")
+	if err := os.WriteFile(scriptPath, []byte(fakerootScript), 0755); err != nil {
+		return fmt.Errorf("failed to write fakeroot script: %w", err)
 	}
 
-	// Sync and unmount
-	exec.Command("sync").Run()
-	cmd = exec.Command("fusermount", "-u", mountDir)
+	cmd = exec.Command("fakeroot", "sh", scriptPath)
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		slog.Warn("Failed to unmount", "error", err)
+		os.Remove(tmpRootfs)
+		return fmt.Errorf("fakeroot rootfs build failed: %w", err)
 	}
 
 	// Atomic rename

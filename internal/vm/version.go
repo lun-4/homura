@@ -35,4 +35,5 @@ package vm
 // 25 - Fix Docker module dependencies: add llc, stp, libcrc32c, crypto modules
 // 26 - Add loop, dummy, and wireguard kernel modules
 // 27 - Remove unused kernel 9p modules from initramfs (homura uses FUSE-based 9pfuse)
-const VMImplementationVersion = 27
+// 28 - Replace fuse2fs with mke2fs -d for faster rootfs building
+const VMImplementationVersion = 28

@@ -90,7 +90,7 @@ the reasons why those are things that i have to do would be best described in an
 | qemu | `qemu-system-x86_64` | VM emulator |
 | passt | `passt` | userspace networking, no root needed |
 | docker | `docker` | image building |
-| fuse2fs | `fuse2fs`, `fusermount` | ext4 FUSE mounting (usually in `e2fsprogs` or `fuse2fs`) |
+| fakeroot | `fakeroot` | fake root ownership for image building |
 | e2fsprogs | `mke2fs`, `resize2fs` | ext4 filesystem tools |
 | squashfs-tools | `unsquashfs` | extract Alpine modules |
 | kmod | `depmod` | kernel module dependencies |
