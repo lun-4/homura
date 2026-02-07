@@ -51,6 +51,12 @@ func Clone(branchName string) error {
 		}
 	}
 
+	// Create CLAUDE.local.md in the worktree
+	if err := git.CreateClaudeLocalFile(destPath, branchName); err != nil {
+		// Non-fatal warning - don't block the clone
+		fmt.Fprintf(os.Stderr, "Warning: failed to create CLAUDE.local.md: %v\n", err)
+	}
+
 	// Update state to set this as default branch
 	state := &config.RepoState{
 		DefaultBranch: branchName,

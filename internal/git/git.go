@@ -153,3 +153,25 @@ func BranchExists(repoPath, branchName string) bool {
 	slog.Info("running git command", "cmd", "git", "args", cmd.Args[1:], "dir", repoPath)
 	return cmd.Run() == nil
 }
+
+// CreateClaudeLocalFile creates or appends to CLAUDE.local.md in a worktree
+func CreateClaudeLocalFile(destPath, branchName string) error {
+	claudeLocalPath := filepath.Join(destPath, "CLAUDE.local.md")
+
+	content := `## Worktree Isolation
+
+This is an isolated git worktree. Stay within this directory - do not access the parent repository unless explicitly asked. If you need files outside this worktree, ask the user first.
+`
+
+	f, err := os.OpenFile(claudeLocalPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open CLAUDE.local.md: %w", err)
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString(content); err != nil {
+		return fmt.Errorf("failed to write to CLAUDE.local.md: %w", err)
+	}
+
+	return nil
+}

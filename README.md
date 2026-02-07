@@ -1,21 +1,21 @@
 # homura
 
-claude code web for terminal addicts - uses git worktrees for fast, disk-efficient branching
+claude code web for terminal addicts w/ git worktrees
 
-(also because CC web does not support setting a docker image as env, and installing Elixir on it was a horror experience
-which also didn't work. so fuck it)
+problem statement: Claude Code on the Web UI sucks ass.
+0. the idea is cool! claude on "YOLO" mode while also being in the isolated env is very cool
+1. does not support setting a custom docker image as an environment, so everything must go through Claude
+2. impossible to install Elixir on it, it was insane horror and it didn't work
+3. very bad latency, general Anthropic UI jank
 
 _lol_
-
-**Note:** This version uses git worktrees internally for faster cloning and better disk efficiency.
-You don't need to know anything about worktrees - homura handles it for you!
 
 ## how get
 
 ```sh
 git clone https://github.com/lun-4/homura
 cd homura
-go build -o homura ./cmd/homura
+make
 
 # do whatever you want
 mv ./homura ~/.local/bin
@@ -24,20 +24,24 @@ mv ./homura ~/.local/bin
 ## how use
 
 ```sh
-cd shit
+cd myrepo
 
 # create a worktree at .homura/fix-indices/
+# injects some prompting into the worktree's CLAUDE.local.md such that claude should
+# just operate inside the worktree (if you want full isolation guarantees, look into `homura vm`)
 homura clone fix-indices
 
 # list all branches. you can create more than one concurrently
 homura ls
 
 # running `homura clone` sets a default branch to the newly created one.
+# that means you don't need to give the branch name to some other commands (all optional)
 homura sh [branch]
 
 # in the inner shell, you can do whatever you want.
 # this is a git worktree sharing the same .git
 # and that includes running multiple copies of claude
+# (NOTE: merge conflict resolution between multiple agents is left as an exercise to the reader)
 claude
 
 # since it's a worktree, commits go to the same repo!
@@ -53,3 +57,132 @@ exit
 # if there are uncommitted changes, this will fail unless you add `-f`
 homura rm
 ```
+
+## `homura vm`
+
+**NOTE** linux only atm
+
+this is my freaky answer to sandboxing. there are issues with other sandboxing solutions
+(claude code's bwrap-based sandbox, the remote solutions like exe.dev/sprites/shellbox, etc)
+and i'll definitely write an article on it, but for now this is what i got.
+
+`homura vm` is a little tool that will:
+- download a linux kernel from Alpine
+- download some kernel modules to make a functional VM
+- download and assemble an Alpine root fs with Docker
+- repackage it all together into an ext4 filesystem image
+- granular and dynamic mirroring of the host filesystem into the guest (through virtiofs)
+  - because of virtiofs you need a high max fd limit. you can do this via a sudo shell alias, as an example `maxfd="sudo -E bash -c 'ulimit -n 524288 && exec sudo -Eu luna fish'"`
+- make QEMU start with that image with configured SSH and networking via `passt`
+  - each VM gets allocated a 10 port range starting from 10000, so the first VM gets 10000-10009 (10000 being SSH), next VM gets 10010-10019, etc
+
+the reasons why those are things that i have to do would be best described in an article, for now here's the setup
+
+### requirements
+
+**system:**
+- Linux with KVM support (check with `ls /dev/kvm`)
+- internet access (to download Alpine components on first run)
+
+**packages:**
+| package | provides | notes |
+|---------|----------|-------|
+| qemu | `qemu-system-x86_64` | VM emulator |
+| passt | `passt` | userspace networking, no root needed |
+| docker | `docker` | image building |
+| fakeroot | `fakeroot` | fake root ownership for image building |
+| e2fsprogs | `mke2fs`, `resize2fs` | ext4 filesystem tools |
+| squashfs-tools | `unsquashfs` | extract Alpine modules |
+| kmod | `depmod` | kernel module dependencies |
+| coreutils | GNU `truncate`, `cp` | sparse file creation |
+| tar, gzip, cpio | archive tools | initramfs building |
+| openssh | `ssh-keygen` | VM host key generation |
+
+installing those packages on your distro is left as an exercise to the reader
+
+NOTE: by default, the current paths are shared with the guest:
+- `<cwd>:rw`
+- `~/.claude.json:rw`
+- `~/.claude:rw`
+
+this lets claude to be run inside the system without having to re-login, a truly ephemeral vm with just what it needs.
+
+### building
+
+```sh
+# while in homura, build if you haven't
+make
+
+# virtio is the default guest fs share type due to performance reasons, you will need to build this
+# you can clone this anywhere at the moment
+git clone https://github.com/lun-4/virtiofsd
+cd virtiofsd && cargo build --release --features http-control
+cp ./target/release/virtiofsd ~/.cache/homura/bin/virtiofsd
+```
+
+and how to use it
+
+```sh
+cd myrepo
+
+homura clone fix-indices
+
+# automatically takes the default branch
+homura vm
+# OR select your branch
+homura vm fix-indices
+
+# get a separate tmux pane
+cd myrepo
+
+# and now you can enter the vm!
+homura vm ssh
+
+# the host fs gets shared under /mnt/host
+cd /mnt/host/home/luna/path/to/myrepo
+
+# claude is preinstalled
+claude
+```
+
+### vm.json
+
+homura will check `~/.config/homura/vm.json` and you can define things here:
+- `allowPaths` is a list of file paths that will be automatically exposed to the guest on vm setup.
+  - useful to put some tools or scripts to configure claude properly with yolo mode
+  - paths are `<host path>:<ro or rw>`
+- `snapshot` is a list of paths that will be snapshotted daily once you start a vm, this is a best-effort snapshot (archives the respective folders in a single .tar)
+
+```json
+{
+  "configVersion": 1,
+  "allowPaths": [
+    "/home/luna/.config/homura/custom-vm-bin:ro",
+  ],
+  "snapshot": [
+    "/home/luna/.claude",
+    "/home/luna/.claude.json"
+  ]
+}
+```
+
+
+### custom dockerfile
+
+if you want to install more packages into the base image, create `~/.config/homura/Dockerfile.custom`, an example of mine:
+
+```dockerfile
+# you'll need to change this whenever i change the base image to ensure the images are recent and prevent rebuilds
+# because of this you'll need to remove old images manually. i could add auto cleaning in the future though!
+FROM homura-vm-alpine-base:v23
+
+RUN apk add --no-cache vim tmux ripgrep
+RUN apk update
+RUN apk add elixir erlang erlang-dev git sqlite sqlite-dev build-base go
+RUN mix local.hex --force
+RUN mix local.rebar --force
+
+RUN echo 'export PATH="/mnt/host/home/luna/.config/homura/custom-vm-bin:$PATH"' >> /etc/profile
+RUN echo 'set -gx PATH /mnt/host/home/luna/.config/homura/custom-vm-bin $PATH' >> /root/.config/fish/config.fish
+```
+

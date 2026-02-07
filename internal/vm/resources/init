@@ -1,0 +1,57 @@
+#!/bin/sh
+
+# Create busybox symlinks first
+/bin/busybox mkdir -p /bin /sbin /usr/bin /usr/sbin
+/bin/busybox --install -s
+
+# Mount essential filesystems
+mkdir -p /proc /sys /dev /newroot
+mount -t proc none /proc
+mount -t sysfs none /sys
+mount -t devtmpfs none /dev
+
+echo "Loading modules..."
+modprobe virtio_pci
+modprobe virtio_blk
+modprobe virtio_net
+modprobe mbcache
+modprobe jbd2
+modprobe ext4
+
+# Wait for /dev/vda to appear
+echo "Waiting for /dev/vda..."
+count=0
+while [ ! -b /dev/vda ] && [ $count -lt 50 ]; do
+    sleep 0.1
+    count=$((count + 1))
+done
+
+if [ ! -b /dev/vda ]; then
+    echo "ERROR: /dev/vda not found!"
+    echo "Available block devices:"
+    ls -la /dev/vd* /dev/sd* 2>/dev/null || echo "  none"
+    echo "Dropping to shell..."
+    exec /bin/sh
+fi
+
+# Give it a moment to settle
+sleep 0.5
+
+echo "Mounting /dev/vda to /newroot..."
+mount -t ext4 /dev/vda /newroot
+if [ $? -ne 0 ]; then
+    echo "ERROR: Failed to mount /dev/vda"
+    echo "Dropping to shell..."
+    exec /bin/sh
+fi
+
+echo "Configuring network..."
+ip link set lo up
+ip link set eth0 up
+ip addr add 10.0.2.15/24 dev eth0
+ip route add default via 10.0.2.2
+hostname homura-vm
+
+echo "Switching root..."
+umount /proc /sys
+exec switch_root /newroot /sbin/init
