@@ -827,6 +827,13 @@ if mountpoint -q /mnt/host; then
             cat "$USER_CLAUDE" >> /etc/homura/claude-config/CLAUDE.md
             echo "Appended user CLAUDE.md customizations"
         fi
+
+        # Symlink host home path so host absolute paths work in VM
+        if [ -n "$HOST_HOME" ] && [ "$HOST_HOME" != "/root" ]; then
+            mkdir -p "$(dirname "$HOST_HOME")"
+            ln -sfn "/mnt/host${HOST_HOME}" "$HOST_HOME"
+            echo "Symlinked $HOST_HOME -> /mnt/host${HOST_HOME}"
+        fi
     fi
 fi
 

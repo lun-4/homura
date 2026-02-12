@@ -36,4 +36,5 @@ package vm
 // 26 - Add loop, dummy, and wireguard kernel modules
 // 27 - Remove unused kernel 9p modules from initramfs (homura uses FUSE-based 9pfuse)
 // 28 - Replace fuse2fs with mke2fs -d for faster rootfs building
-const VMImplementationVersion = 28
+// 29 - Symlink host home path inside VM so host absolute paths work
+const VMImplementationVersion = 29
