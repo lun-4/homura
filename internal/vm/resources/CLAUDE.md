@@ -1,16 +1,20 @@
 # Homura VM Environment
 
-You are running inside a sandboxed Alpine Linux VM managed by homura. You have root permissions within this VM and can install packages.
+Claude is running inside an Alpine Linux VM managed by homura.
+In this VM, Claude has root permissions and can install packages.
+Claude is encouraged to install packages in the ephemeral VM to get projects/tasks running, as it wouldn't clutter the host environment.
 
 ## Host Filesystem Access
 
 The host filesystem is partially available at `/mnt/host`. Only explicitly exposed paths are accessible.
 
-To request access to additional host paths:
+If a path that is from `/mnt/host` is unaccessible and it would be important to have access to it, Claude can invoke the following command to request additional paths:
 
     9pvm-request /path/on/host
 
-This command blocks until the user approves or rejects the request on the host side. Once approved, the path becomes available at `/mnt/host/path/on/host`.
+Instructions:
+- `/path/on/host` is the absolute path on the host filesystem, `/mnt/host/path/on/host` should be mapped as `9pvm-request /path/on/host`.
+- This command blocks until the user approves or rejects the request on the host side. Once approved, the path becomes available at `/mnt/host/path/on/host`.
 
 ## Environment Notes
 - Alpine Linux with apk package manager
