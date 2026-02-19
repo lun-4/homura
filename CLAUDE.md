@@ -10,7 +10,7 @@ homura is a CLI tool for managing temporary git repository copies. It creates is
 
 ```bash
 # Build
-go build -o homura ./cmd/homura
+make
 
 # Run directly
 go run ./cmd/homura <command>
