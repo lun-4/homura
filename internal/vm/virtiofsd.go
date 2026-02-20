@@ -123,6 +123,9 @@ func (v *VirtiofsManager) Start() error {
 		args = append(args, fmt.Sprintf("--share=%s:rw", claudeDir))
 		slog.Info("Auto-exposing Claude config", "path", claudeDir)
 	}
+	claudeLock := filepath.Join(v.HomeDir, ".claude.lock")
+	args = append(args, fmt.Sprintf("--share=%s:rw", claudeLock))
+	slog.Info("Auto-exposing Claude lock", "path", claudeLock)
 
 	// Add VM CLAUDE.md customizations (read-only)
 	vmClaudeMd := filepath.Join(v.HomeDir, ".config", "homura", "CLAUDE.md")

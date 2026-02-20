@@ -817,6 +817,10 @@ if mountpoint -q /mnt/host; then
             ln -sf "$CLAUDE_DIR" /root/.claude
             echo "Symlinked /root/.claude"
         fi
+        # Symlink .claude.lock
+        CLAUDE_LOCK="/mnt/host${HOST_HOME}/.claude.lock"
+        ln -sf "$CLAUDE_LOCK" /root/.claude.lock
+        echo "Symlinked /root/.claude.lock"
 
         # Append user VM CLAUDE.md customizations if they exist
         USER_CLAUDE="/mnt/host${HOST_HOME}/.config/homura/CLAUDE.md"

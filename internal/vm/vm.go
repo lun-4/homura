@@ -219,6 +219,10 @@ func NewVM(shareMode ShareMode) (*VM, error) {
 			addedPaths[claudeDir] = false
 			slog.Info("Auto-exposing Claude config", "path", claudeDir)
 		}
+		claudeLock := filepath.Join(homeDir, ".claude.lock")
+		ninepArgs = append(ninepArgs, claudeLock)
+		addedPaths[claudeLock] = false
+		slog.Info("Auto-exposing Claude lock", "path", claudeLock)
 
 		// Auto-expose VM CLAUDE.md customizations (read-only)
 		vmClaudeMd := filepath.Join(homeDir, ".config", "homura", "CLAUDE.md")
