@@ -154,6 +154,52 @@ func BranchExists(repoPath, branchName string) bool {
 	return cmd.Run() == nil
 }
 
+// AddToGitExclude adds a pattern to $GIT_DIR/info/exclude for the given worktree.
+// This uses the per-worktree exclude file so patterns don't affect other worktrees
+// or get committed to the repository.
+func AddToGitExclude(worktreePath, pattern string) error {
+	cmd := exec.Command("git", "rev-parse", "--git-dir")
+	cmd.Dir = worktreePath
+	slog.Info("running git command", "cmd", "git", "args", cmd.Args[1:], "dir", worktreePath)
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("failed to find git dir: %w", err)
+	}
+
+	gitDir := strings.TrimSpace(string(output))
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(worktreePath, gitDir)
+	}
+
+	infoDir := filepath.Join(gitDir, "info")
+	if err := os.MkdirAll(infoDir, 0755); err != nil {
+		return fmt.Errorf("failed to create info directory: %w", err)
+	}
+
+	excludePath := filepath.Join(infoDir, "exclude")
+
+	// Check if pattern already exists
+	if existing, err := os.ReadFile(excludePath); err == nil {
+		for _, line := range strings.Split(string(existing), "\n") {
+			if line == pattern {
+				return nil
+			}
+		}
+	}
+
+	f, err := os.OpenFile(excludePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open exclude file: %w", err)
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString(pattern + "\n"); err != nil {
+		return fmt.Errorf("failed to write to exclude file: %w", err)
+	}
+
+	return nil
+}
+
 // CreateClaudeLocalFile creates or appends to CLAUDE.local.md in a worktree
 func CreateClaudeLocalFile(destPath, branchName string) error {
 	claudeLocalPath := filepath.Join(destPath, "CLAUDE.local.md")

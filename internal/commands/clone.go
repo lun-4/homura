@@ -57,6 +57,11 @@ func Clone(branchName string) error {
 		fmt.Fprintf(os.Stderr, "Warning: failed to create CLAUDE.local.md: %v\n", err)
 	}
 
+	// Add CLAUDE.local.md to the worktree's git exclude so it doesn't show as untracked
+	if err := git.AddToGitExclude(destPath, "CLAUDE.local.md"); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to add CLAUDE.local.md to git exclude: %v\n", err)
+	}
+
 	// Update state to set this as default branch
 	state := &config.RepoState{
 		DefaultBranch: branchName,
