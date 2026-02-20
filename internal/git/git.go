@@ -19,7 +19,10 @@ func IsGitRepo(path string) bool {
 	return info.IsDir()
 }
 
-// GetRepoRoot returns the root directory of the git repository
+// GetRepoRoot returns the root directory of the git repository.
+// If the current directory is inside a .homura/<branch>/ subdirectory,
+// it returns the parent repository root instead, so that homura commands
+// operate on the main repo rather than creating nested .homura directories.
 func GetRepoRoot(startPath string) (string, error) {
 	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
 	cmd.Dir = startPath
@@ -28,7 +31,36 @@ func GetRepoRoot(startPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("not a git repository")
 	}
-	return strings.TrimSpace(string(output)), nil
+	repoRoot := strings.TrimSpace(string(output))
+
+	// Check if this repo root is inside a .homura/ subdirectory of a parent repo
+	if parentRoot, ok := resolveHomuraParent(repoRoot); ok {
+		slog.Info("detected homura subdirectory, using parent repo", "child", repoRoot, "parent", parentRoot)
+		return parentRoot, nil
+	}
+
+	return repoRoot, nil
+}
+
+// resolveHomuraParent checks if the given path is inside a .homura/<branch>/
+// directory and returns the parent repo root if so.
+func resolveHomuraParent(repoRoot string) (string, bool) {
+	cleanPath := filepath.Clean(repoRoot)
+	sep := string(filepath.Separator)
+
+	// Look for /.homura/ in the path
+	homuraSegment := sep + ".homura" + sep
+	idx := strings.LastIndex(cleanPath, homuraSegment)
+	if idx == -1 {
+		return "", false
+	}
+
+	parentRoot := cleanPath[:idx]
+	if !IsGitRepo(parentRoot) {
+		return "", false
+	}
+
+	return parentRoot, true
 }
 
 // HasUncommittedChanges checks if the repository has uncommitted changes
