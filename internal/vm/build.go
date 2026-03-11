@@ -1080,12 +1080,20 @@ depmod -b "%s" "%s" || true
 	// Add SSH host key copying
 	fakerootScript += fmt.Sprintf(`
 # 6. Copy SSH host keys
+mkdir -p "%s/etc/ssh"
 cp -a "%s"/* "%s/etc/ssh/" 2>/dev/null || true
 
-# 7. Create the ext4 image in one shot
-mke2fs -q -t ext4 -O "^metadata_csum,^64bit" -E root_owner=0:0 -L rootfs -d "%s" "%s" 2048M
-`, paths.SSHHostKeysDir, stagingDir,
-		stagingDir, tmpRootfs,
+# 7. Size the ext4 image based on the staged rootfs with extra headroom.
+ROOTFS_KB=$(du -sk "%s" | cut -f1)
+ROOTFS_KB=$((ROOTFS_KB + ROOTFS_KB / 3 + 524288))
+MIN_ROOTFS_KB=$((3072 * 1024))
+if [ "$ROOTFS_KB" -lt "$MIN_ROOTFS_KB" ]; then
+    ROOTFS_KB=$MIN_ROOTFS_KB
+fi
+truncate -s "${ROOTFS_KB}K" "%s"
+mke2fs -q -t ext4 -O "^metadata_csum,^64bit" -E root_owner=0:0 -L rootfs -d "%s" "%s"
+`, stagingDir, paths.SSHHostKeysDir, stagingDir,
+		stagingDir, tmpRootfs, stagingDir, tmpRootfs,
 	)
 
 	// Write the script to a temp file and run it under fakeroot
