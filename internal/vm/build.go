@@ -19,6 +19,7 @@ const (
 	alpineVersion = "3.21"
 	alpineRelease = "3.21.3"
 	alpineMirror  = "https://dl-cdn.alpinelinux.org"
+	rootfsDistro  = "ubuntu-24.04"
 )
 
 //go:embed resources/Dockerfile
@@ -99,7 +100,7 @@ func getCacheDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cacheDir := filepath.Join(home, ".cache", "homura", fmt.Sprintf("v%d", VMImplementationVersion), "vm-images", "alpine-"+alpineVersion)
+	cacheDir := filepath.Join(home, ".cache", "homura", fmt.Sprintf("v%d", VMImplementationVersion), "vm-images", rootfsDistro)
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		return "", err
 	}
@@ -448,7 +449,7 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 	cleanupStaleContainers(dockerCmd)
 
 	// Check if base image already exists
-	baseImageName := fmt.Sprintf("homura-vm-alpine-base:v%d", VMImplementationVersion)
+	baseImageName := fmt.Sprintf("homura-vm-ubuntu-base:v%d", VMImplementationVersion)
 	baseImageExists := false
 	checkBaseCmd := exec.Command(dockerCmd, "image", "inspect", baseImageName)
 	if err := checkBaseCmd.Run(); err == nil {
@@ -573,7 +574,7 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 		slog.Info("Found custom Dockerfile", "path", customDockerfilePath)
 
 		// Validate FROM line matches current version
-		expectedFrom := fmt.Sprintf("FROM homura-vm-alpine-base:v%d", VMImplementationVersion)
+		expectedFrom := fmt.Sprintf("FROM homura-vm-ubuntu-base:v%d", VMImplementationVersion)
 		if err := validateCustomDockerfileVersion(string(customContent), expectedFrom); err != nil {
 			return fmt.Errorf("invalid custom Dockerfile: %w\n\nPlease update %s:\n  Change the FROM line to: %s",
 				err, customDockerfilePath, expectedFrom)
@@ -582,7 +583,7 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 		// Calculate hash combining Dockerfile content + base image ID
 		// This ensures rebuild when either the custom Dockerfile OR base image changes
 		combinedHash := hashCustomImage(customContent, baseImageID)
-		customImageName := fmt.Sprintf("homura-vm-alpine-custom:%s", combinedHash)
+		customImageName := fmt.Sprintf("homura-vm-ubuntu-custom:%s", combinedHash)
 
 		// Check if custom image already exists
 		checkCmd := exec.Command(dockerCmd, "image", "inspect", customImageName)
@@ -724,13 +725,13 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 		return fmt.Errorf("failed to write hostname: %w", err)
 	}
 
-	// 9pmount.start (filesystem mount script)
+	// fsmount.sh (filesystem mount script)
 	ninepScript := `#!/bin/sh
 # Auto-mount filesystem (virtiofs or 9p via FUSE) based on kernel params
 
 # Log all output to file
 exec >> /var/log/fsmount.log 2>&1
-echo "=== fsmount.start running at $(date) ==="
+echo "=== fsmount.sh running at $(date) ==="
 
 # Ensure hostname is set (backup in case hostname service didn't run)
 hostname -F /etc/hostname 2>/dev/null || hostname homura-vm
@@ -841,19 +842,36 @@ if mountpoint -q /mnt/host; then
     fi
 fi
 
-echo "=== fsmount.start finished at $(date) ==="
+echo "=== fsmount.sh finished at $(date) ==="
 `
-	if err := os.WriteFile(filepath.Join(injectDir, "9pmount.start"), []byte(ninepScript), 0755); err != nil {
-		return fmt.Errorf("failed to write 9pmount.start: %w", err)
+	if err := os.WriteFile(filepath.Join(injectDir, "fsmount.sh"), []byte(ninepScript), 0755); err != nil {
+		return fmt.Errorf("failed to write fsmount.sh: %w", err)
 	}
 
-	// swap.start
+	fsmountService := `[Unit]
+Description=Homura host filesystem mount
+After=local-fs.target
+Before=ssh.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/homura/fsmount.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+`
+	if err := os.WriteFile(filepath.Join(injectDir, "homura-fsmount.service"), []byte(fsmountService), 0644); err != nil {
+		return fmt.Errorf("failed to write homura-fsmount.service: %w", err)
+	}
+
+	// swap.sh
 	swapScript := `#!/bin/sh
 # Create and enable swap file on boot
 
 # Log all output to file
 exec >> /var/log/swap.log 2>&1
-echo "=== swap.start running at $(date) ==="
+echo "=== swap.sh running at $(date) ==="
 
 SWAPFILE=/var/swap
 SWAPSIZE=1G
@@ -869,20 +887,36 @@ fi
 # Enable swap
 swapon "$SWAPFILE" 2>/dev/null && echo "Swap enabled: $SWAPFILE"
 
-echo "=== swap.start finished at $(date) ==="
+echo "=== swap.sh finished at $(date) ==="
 `
-	if err := os.WriteFile(filepath.Join(injectDir, "swap.start"), []byte(swapScript), 0755); err != nil {
-		return fmt.Errorf("failed to write swap.start: %w", err)
+	if err := os.WriteFile(filepath.Join(injectDir, "swap.sh"), []byte(swapScript), 0755); err != nil {
+		return fmt.Errorf("failed to write swap.sh: %w", err)
 	}
 
-	// 01docker-modules.start
+	swapService := `[Unit]
+Description=Homura swapfile setup
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/homura/swap.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+`
+	if err := os.WriteFile(filepath.Join(injectDir, "homura-swap.service"), []byte(swapService), 0644); err != nil {
+		return fmt.Errorf("failed to write homura-swap.service: %w", err)
+	}
+
+	// docker-modules.sh
 	dockerModulesScript := `#!/bin/sh
 # Load kernel modules required for Docker/container support
 # This script runs early in boot to ensure modules are available before Docker starts
 # Module load order matters due to dependencies!
 
 exec >> /var/log/docker-modules.log 2>&1
-echo "=== docker-modules.start running at $(date) ==="
+echo "=== docker-modules.sh running at $(date) ==="
 
 # Overlay filesystem (Docker's preferred storage driver)
 modprobe overlay && echo "Loaded: overlay"
@@ -915,10 +949,27 @@ modprobe xt_MASQUERADE && echo "Loaded: xt_MASQUERADE"
 modprobe xt_addrtype && echo "Loaded: xt_addrtype"
 modprobe xt_conntrack && echo "Loaded: xt_conntrack"
 
-echo "=== docker-modules.start finished at $(date) ==="
+echo "=== docker-modules.sh finished at $(date) ==="
 `
-	if err := os.WriteFile(filepath.Join(injectDir, "01docker-modules.start"), []byte(dockerModulesScript), 0755); err != nil {
-		return fmt.Errorf("failed to write 01docker-modules.start: %w", err)
+	if err := os.WriteFile(filepath.Join(injectDir, "docker-modules.sh"), []byte(dockerModulesScript), 0755); err != nil {
+		return fmt.Errorf("failed to write docker-modules.sh: %w", err)
+	}
+
+	dockerModulesService := `[Unit]
+Description=Homura Docker kernel modules
+After=local-fs.target systemd-modules-load.service
+Before=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/homura/docker-modules.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+`
+	if err := os.WriteFile(filepath.Join(injectDir, "homura-docker-modules.service"), []byte(dockerModulesService), 0644); err != nil {
+		return fmt.Errorf("failed to write homura-docker-modules.service: %w", err)
 	}
 
 	// CLAUDE.md
@@ -955,13 +1006,22 @@ cp "%s/resolv.conf" "%s/etc/resolv.conf"
 cp "%s/hosts" "%s/etc/hosts"
 cp "%s/hostname" "%s/etc/hostname"
 
-mkdir -p "%s/etc/local.d"
-cp "%s/9pmount.start" "%s/etc/local.d/9pmount.start"
-chmod 755 "%s/etc/local.d/9pmount.start"
-cp "%s/swap.start" "%s/etc/local.d/swap.start"
-chmod 755 "%s/etc/local.d/swap.start"
-cp "%s/01docker-modules.start" "%s/etc/local.d/01docker-modules.start"
-chmod 755 "%s/etc/local.d/01docker-modules.start"
+mkdir -p "%s/usr/local/lib/homura"
+cp "%s/fsmount.sh" "%s/usr/local/lib/homura/fsmount.sh"
+chmod 755 "%s/usr/local/lib/homura/fsmount.sh"
+cp "%s/swap.sh" "%s/usr/local/lib/homura/swap.sh"
+chmod 755 "%s/usr/local/lib/homura/swap.sh"
+cp "%s/docker-modules.sh" "%s/usr/local/lib/homura/docker-modules.sh"
+chmod 755 "%s/usr/local/lib/homura/docker-modules.sh"
+
+mkdir -p "%s/etc/systemd/system"
+mkdir -p "%s/etc/systemd/system/multi-user.target.wants"
+cp "%s/homura-fsmount.service" "%s/etc/systemd/system/homura-fsmount.service"
+cp "%s/homura-swap.service" "%s/etc/systemd/system/homura-swap.service"
+cp "%s/homura-docker-modules.service" "%s/etc/systemd/system/homura-docker-modules.service"
+ln -sf /etc/systemd/system/homura-fsmount.service "%s/etc/systemd/system/multi-user.target.wants/homura-fsmount.service"
+ln -sf /etc/systemd/system/homura-swap.service "%s/etc/systemd/system/multi-user.target.wants/homura-swap.service"
+ln -sf /etc/systemd/system/homura-docker-modules.service "%s/etc/systemd/system/multi-user.target.wants/homura-docker-modules.service"
 
 mkdir -p "%s/etc/homura/claude-config"
 cp "%s/CLAUDE.md" "%s/etc/homura/claude-config/CLAUDE.md"
@@ -978,6 +1038,14 @@ cp "%s/CLAUDE.md" "%s/etc/homura/claude-config/CLAUDE.md"
 		injectDir, stagingDir,
 		stagingDir,
 		injectDir, stagingDir,
+		stagingDir,
+		stagingDir,
+		stagingDir,
+		injectDir, stagingDir,
+		injectDir, stagingDir,
+		injectDir, stagingDir,
+		stagingDir,
+		stagingDir,
 		stagingDir,
 		stagingDir,
 		claudeConfigInjectDir, stagingDir,

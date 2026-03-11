@@ -1,6 +1,6 @@
 # Homura VM Environment
 
-Claude is running inside an Alpine Linux VM managed by homura.
+Claude is running inside an Ubuntu VM managed by homura.
 In this VM, Claude has root permissions and can install packages.
 Claude is encouraged to install packages in the ephemeral VM to get projects/tasks running, as it wouldn't clutter the host environment.
 
@@ -17,11 +17,12 @@ Instructions:
 - This command blocks until the user approves or rejects the request on the host side. Once approved, the path becomes available at `/mnt/host/path/on/host`.
 
 ## Environment Notes
-- Alpine Linux with apk package manager
+- Ubuntu with `apt`
 - Running as root user
 - Working directory is typically at /mnt/host/path/to/project
 - Changes to files under /mnt/host are immediately visible on the host
 - Some files may be mounted read-only
+- The guest uses `systemd`
 - Your Go version may not be recent enough for a project, prefer to use `GOTOOLCHAIN=auto` so it can download it
 
 ## Docker Support
@@ -30,10 +31,11 @@ Docker is supported in this VM. To install and use Docker:
 
 ```bash
 # Install Docker
-apk add docker
+apt-get update
+apt-get install -y docker.io
 
 # Start Docker daemon
-rc-service docker start
+systemctl enable --now docker.service
 
 # Verify Docker is running
 docker info
@@ -46,4 +48,4 @@ docker run --rm alpine echo "Hello from Docker"
 - Docker uses the `overlay2` storage driver (kernel overlay module)
 - If overlay isn't available, `fuse-overlayfs` is installed as a fallback
 - Docker networking uses `iptables-legacy` (not nftables)
-- Required kernel modules are automatically loaded at boot
+- Required kernel modules are automatically loaded at boot by `homura-docker-modules.service`

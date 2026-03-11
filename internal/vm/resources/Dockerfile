@@ -1,24 +1,44 @@
-FROM alpine:3.21
+FROM ubuntu:24.04
 
-RUN apk add --no-cache openrc openssh curl git fish htop bash helix nodejs go python3 cmake \
-    && sed -i 's|^root:.*:/bin/sh$|root:x:0:0:root:/root:/usr/bin/fish|' /etc/passwd
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PATH=/root/sdk/go1.25.5/bin:/root/go/bin:$PATH
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    build-essential \
+    ca-certificates \
+    cmake \
+    curl \
+    dbus \
+    fish \
+    fuse-overlayfs \
+    fuse3 \
+    git \
+    golang-go \
+    htop \
+    iproute2 \
+    iptables \
+    iputils-ping \
+    kmod \
+    nodejs \
+    openssh-server \
+    procps \
+    python3 \
+    python3-pip \
+    systemd \
+    systemd-sysv \
+    vim \
+    && rm -rf /var/lib/apt/lists/* \
+    && usermod -s /usr/bin/fish root
 
 # get latest go version
 RUN go install golang.org/dl/go1.25.5@latest
-RUN ~/go/bin/go1.25.5 download
-
-# Enable services for boot
-RUN rc-update add sshd default
-RUN rc-update add devfs boot
-RUN rc-update add procfs boot
-RUN rc-update add sysfs boot
-RUN rc-update add hostname boot
-
-# Configure network interface with static IP (QEMU user-mode uses 10.0.2.0/24)
-RUN mkdir -p /etc/network && printf 'auto lo\niface lo inet loopback\n\nauto eth0\niface eth0 inet static\n    address 10.0.2.15\n    netmask 255.255.255.0\n    gateway 10.0.2.2\n' > /etc/network/interfaces
+RUN /root/go/bin/go1.25.5 download
 
 # Configure SSH - key auth only
-RUN sed -i 's/#PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+RUN sed -ri 's/^#?PermitRootLogin .*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config && \
+    sed -ri 's/^#?PasswordAuthentication .*/PasswordAuthentication no/' /etc/ssh/sshd_config && \
+    sed -ri 's|^#?AuthorizedKeysFile .*|AuthorizedKeysFile .ssh/authorized_keys|' /etc/ssh/sshd_config
 
 # Setup root SSH directory
 RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh
@@ -26,9 +46,6 @@ RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh
 # Inject SSH public key at build time
 ARG SSH_PUB_KEY
 RUN echo "$SSH_PUB_KEY" > /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
-
-# Fix /var/empty permissions for sshd privilege separation
-RUN mkdir -p /var/empty && chown root:root /var/empty && chmod 755 /var/empty
 
 # Set hostname
 RUN echo "homura-vm" > /etc/hostname
@@ -43,12 +60,16 @@ RUN rm -frv ~/.claude
 RUN rm -fv ~/.claude.json
 RUN rm -fv ~/.claude.json.backup
 
-# Force OpenRC to run in default mode (not container mode)
-# The rootfs is built in Docker, so /.dockerenv exists and OpenRC would detect [DOCKER]
-RUN sed -i 's/^#rc_sys=.*/rc_sys=""/' /etc/rc.conf
+# Use multi-user.target and suppress getty noise on tty1/ttyS0.
+RUN ln -sf /lib/systemd/system/multi-user.target /etc/systemd/system/default.target && \
+    ln -sf /lib/systemd/system/ssh.service /etc/systemd/system/multi-user.target.wants/ssh.service && \
+    ln -sf /dev/null /etc/systemd/system/getty@tty1.service && \
+    ln -sf /dev/null /etc/systemd/system/serial-getty@ttyS0.service
 
-# Disable all TTYs - we use SSH only, no console login needed
-RUN sed -i '/^tty[0-9]/d' /etc/inittab
+# Ensure systemd and D-Bus do not retain a Docker-generated machine identity.
+RUN truncate -s 0 /etc/machine-id && \
+    rm -f /var/lib/dbus/machine-id && \
+    ln -sf /etc/machine-id /var/lib/dbus/machine-id
 
 # Add ~/.local/bin to PATH and set high file descriptor limit for all shells
 # (default 1024 is too low for many tools)
@@ -78,20 +99,7 @@ RUN cd /tmp/9pfuse && \
     go build -o /usr/local/bin/9pfuse . && \
     rm -rf /tmp/9pfuse
 
-# Install FUSE kernel module and tools
-# Note: alpine-virt kernel modules are not packaged separately
-# We'll copy the fuse module from /lib/modules during build
-RUN apk add --no-cache fuse3 fuse3-libs
-
-# Install Docker dependencies (so `apk add docker` works cleanly)
-# - fuse-overlayfs: fallback storage driver when overlay kernel module isn't available
-# - iptables-legacy: Docker networking compatibility (nftables not supported in this kernel)
-RUN apk add --no-cache fuse-overlayfs iptables-legacy
-
 # Configure iptables to use legacy backend (required for Docker)
 # The nftables backend requires kernel modules we don't have
-RUN ln -sf /usr/sbin/iptables-legacy /usr/sbin/iptables && \
-    ln -sf /usr/sbin/ip6tables-legacy /usr/sbin/ip6tables
-
-# Enable local service for 9p mount
-RUN rc-update add local default
+RUN update-alternatives --set iptables /usr/sbin/iptables-legacy && \
+    update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy

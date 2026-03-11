@@ -174,15 +174,24 @@ if you want to install more packages into the base image, create `~/.config/homu
 ```dockerfile
 # you'll need to change this whenever i change the base image to ensure the images are recent and prevent rebuilds
 # because of this you'll need to remove old images manually. i could add auto cleaning in the future though!
-FROM homura-vm-alpine-base:v23
+FROM homura-vm-ubuntu-base:v32
 
-RUN apk add --no-cache vim tmux ripgrep
-RUN apk update
-RUN apk add elixir erlang erlang-dev git sqlite sqlite-dev build-base go
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    vim \
+    tmux \
+    ripgrep \
+    elixir \
+    erlang \
+    erlang-dev \
+    git \
+    sqlite3 \
+    libsqlite3-dev \
+    build-essential \
+    golang-go \
+    && rm -rf /var/lib/apt/lists/*
 RUN mix local.hex --force
 RUN mix local.rebar --force
 
 RUN echo 'export PATH="/mnt/host/home/luna/.config/homura/custom-vm-bin:$PATH"' >> /etc/profile
 RUN echo 'set -gx PATH /mnt/host/home/luna/.config/homura/custom-vm-bin $PATH' >> /root/.config/fish/config.fish
 ```
-
