@@ -113,16 +113,17 @@ func RunVM(cmd *cobra.Command, args []string, branchName string, shareModeStr st
 # IMPORTANT: The FROM line must match the current homura version
 # When homura updates, you must update this FROM line to match
 
-FROM homura-vm-alpine-base:v%d
+FROM homura-vm-ubuntu-base:v%d
 
 # Example: Add additional packages
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     vim \
     neovim \
     tmux \
     ripgrep \
-    fd \
-    bat
+    fd-find \
+    bat \
+    && rm -rf /var/lib/apt/lists/*
 
 # Example: Install Python packages
 RUN pip install --break-system-packages \

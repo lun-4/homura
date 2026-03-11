@@ -53,5 +53,4 @@ ip route add default via 10.0.2.2
 hostname homura-vm
 
 echo "Switching root..."
-umount /proc /sys
 exec switch_root /newroot /sbin/init

@@ -37,4 +37,7 @@ package vm
 // 27 - Remove unused kernel 9p modules from initramfs (homura uses FUSE-based 9pfuse)
 // 28 - Replace fuse2fs with mke2fs -d for faster rootfs building
 // 29 - Symlink host home path inside VM so host absolute paths work
-const VMImplementationVersion = 29
+// 30 - Port guest rootfs from Alpine/OpenRC to Debian/systemd
+// 31 - Size Debian rootfs images dynamically from staged contents
+// 32 - Switch guest rootfs from Debian to Ubuntu 24.04
+const VMImplementationVersion = 32
