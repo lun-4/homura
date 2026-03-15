@@ -833,6 +833,30 @@ if mountpoint -q /mnt/host; then
             echo "Appended user CLAUDE.md customizations"
         fi
 
+        # Inject VM networking info into CLAUDE.md
+        VM_HOSTIP=$(grep -o 'vm.hostip=[^ ]*' /proc/cmdline | cut -d= -f2)
+        VM_SSHPORT=$(grep -o 'vm.sshport=[^ ]*' /proc/cmdline | cut -d= -f2)
+        VM_PORTSTART=$(grep -o 'vm.portstart=[^ ]*' /proc/cmdline | cut -d= -f2)
+        VM_PORTEND=$(grep -o 'vm.portend=[^ ]*' /proc/cmdline | cut -d= -f2)
+        VM_SLOT=$(grep -o 'vm.slot=[^ ]*' /proc/cmdline | cut -d= -f2)
+        if [ -n "$VM_HOSTIP" ]; then
+            FIRST_FWD_PORT=$(($VM_SSHPORT + 1))
+            cat >> /etc/homura/claude-config/CLAUDE.md <<VMEOF
+
+## VM Networking
+
+This VM is slot $VM_SLOT on the host.
+
+- **Host-side IP:** $VM_HOSTIP
+- **SSH from host:** ssh -p $VM_SSHPORT root@$VM_HOSTIP
+- **Port range:** $VM_PORTSTART-$VM_PORTEND (first port is SSH, remaining 9 are 1:1 passthrough)
+- **Guest IP:** 10.0.2.15 (gateway to host: 10.0.2.2)
+
+To expose a service running in this VM to the host, bind it to 0.0.0.0 on one of the passthrough ports ($FIRST_FWD_PORT-$VM_PORTEND inside the VM maps to $VM_HOSTIP:$FIRST_FWD_PORT-$VM_PORTEND on the host).
+VMEOF
+            echo "Injected VM networking info into CLAUDE.md"
+        fi
+
         # Symlink host home path so host absolute paths work in VM
         if [ -n "$HOST_HOME" ] && [ "$HOST_HOME" != "/root" ]; then
             mkdir -p "$(dirname "$HOST_HOME")"

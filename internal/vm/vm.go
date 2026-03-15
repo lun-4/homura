@@ -397,6 +397,11 @@ func (vm *VM) Start() error {
 		PasstSocket: vm.PasstManager.SocketPath,
 		HostHomeDir: vm.HostHomeDir,
 		ShareMode:   vm.ShareMode,
+		HostIP:      vm.IPAddress,
+		SSHPort:     vm.PortStart,
+		PortStart:   vm.PortStart,
+		PortEnd:     vm.PortEnd,
+		SlotNumber:  vm.SlotNumber,
 	}
 
 	// Set share-mode-specific config

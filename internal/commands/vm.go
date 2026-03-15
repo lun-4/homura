@@ -178,6 +178,36 @@ RUN echo 'set -gx MY_VAR value' >> /root/.config/fish/config.fish
 	return nil
 }
 
+// VMLs implements the `homura vm ls` command
+func VMLs() error {
+	slots, err := vm.ListAllVMs()
+	if err != nil {
+		return fmt.Errorf("failed to list VMs: %w", err)
+	}
+
+	if len(slots) == 0 {
+		fmt.Println("No running VMs.")
+		return nil
+	}
+
+	fmt.Printf("%-6s %-16s %-8s %-14s %-10s %-8s %s\n",
+		"SLOT", "IP", "SSH", "PORTS", "SHARE", "PID", "WORKING DIR")
+
+	for _, s := range slots {
+		sshPort := fmt.Sprintf("%d", s.PortStart)
+		portRange := fmt.Sprintf("%d-%d", s.PortStart, s.PortEnd)
+		uptime := formatRelativeTime(s.CreatedAt)
+
+		fmt.Printf("%-6d %-16s %-8s %-14s %-10s %-8d %s\n",
+			s.SlotNumber, s.IPAddress, sshPort, portRange,
+			s.ShareMode, s.VMPID, s.WorkingDir)
+		fmt.Printf("       started %s\n", uptime)
+	}
+
+	fmt.Printf("\n%d VM(s) running\n", len(slots))
+	return nil
+}
+
 // VMSsh implements the `homura vm ssh` command
 func VMSsh(cmd *cobra.Command, args []string, branchName string) error {
 	var workDir string

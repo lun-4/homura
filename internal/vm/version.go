@@ -40,4 +40,5 @@ package vm
 // 30 - Port guest rootfs from Alpine/OpenRC to Debian/systemd
 // 31 - Size Debian rootfs images dynamically from staged contents
 // 32 - Switch guest rootfs from Debian to Ubuntu 24.04
-const VMImplementationVersion = 32
+// 33 - Inject VM networking info (host IP, SSH port, port range) into guest CLAUDE.md
+const VMImplementationVersion = 33

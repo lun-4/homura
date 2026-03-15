@@ -500,6 +500,58 @@ func FindVMBySlot(slotNumber int) (*VMSlot, error) {
 	return &slot, nil
 }
 
+// ListAllVMs returns all running VMs, cleaning up stale slots first
+func ListAllVMs() ([]*VMSlot, error) {
+	if err := initGlobalStateDB(); err != nil {
+		return nil, err
+	}
+
+	// Clean up stale slots first
+	if err := CleanupStaleSlots(); err != nil {
+		return nil, fmt.Errorf("failed to cleanup stale slots: %w", err)
+	}
+
+	db, err := sql.Open("sqlite3", GlobalStateDBPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open global state DB: %w", err)
+	}
+	defer db.Close()
+
+	rows, err := db.Query(`
+		SELECT slot_number, ip_address, port_start, port_end, vm_pid,
+		       passt_socket_path, working_dir, ninep_pid, ninep_control_socket,
+		       ninep_control_port, created_at, share_mode, virtiofs_pid,
+		       virtiofs_socket, virtiofs_admin_port, virtiofs_vm_port
+		FROM vm_slots
+		ORDER BY slot_number
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query VMs: %w", err)
+	}
+	defer rows.Close()
+
+	var slots []*VMSlot
+	for rows.Next() {
+		var slot VMSlot
+		if err := rows.Scan(
+			&slot.SlotNumber, &slot.IPAddress, &slot.PortStart, &slot.PortEnd,
+			&slot.VMPID, &slot.PasstSocketPath, &slot.WorkingDir,
+			&slot.NinePPID, &slot.NinePControlSocket, &slot.NinePControlPort,
+			&slot.CreatedAt, &slot.ShareMode, &slot.VirtiofsPID,
+			&slot.VirtiofsSocket, &slot.VirtiofsAdminPort, &slot.VirtiofsVMPort,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan row: %w", err)
+		}
+		slots = append(slots, &slot)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("row iteration error: %w", err)
+	}
+
+	return slots, nil
+}
+
 // FindVMByNinePPID finds a running VM by its 9passthrough PID
 func FindVMByNinePPID(ninepPID int) (*VMSlot, error) {
 	if err := initGlobalStateDB(); err != nil {

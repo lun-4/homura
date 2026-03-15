@@ -25,6 +25,13 @@ type QEMUConfig struct {
 	VirtiofsSocket  string // vhost-user socket for QEMU
 	VirtiofsVMToken string // Token for VM to authenticate with virtiofsd
 	VirtiofsVMPort  int    // Port for VM to send requests to virtiofsd
+
+	// VM networking info (passed to guest for CLAUDE.md injection)
+	HostIP     string // Host-side IP (e.g., 127.0.0.1)
+	SSHPort    int    // Host-side SSH port
+	PortStart  int    // First port in range
+	PortEnd    int    // Last port in range
+	SlotNumber int    // VM slot number
 }
 
 // BuildQEMUArgs builds the argument list for launching QEMU with q35 machine
@@ -99,6 +106,12 @@ func buildKernelCmdline(cfg *QEMUConfig) string {
 	// Add host home directory for Claude config symlinks
 	if cfg.HostHomeDir != "" {
 		cmdline += fmt.Sprintf(" host.home=%s", cfg.HostHomeDir)
+	}
+
+	// Add VM networking info (used by fsmount.sh to inject into CLAUDE.md)
+	if cfg.HostIP != "" {
+		cmdline += fmt.Sprintf(" vm.hostip=%s vm.sshport=%d vm.portstart=%d vm.portend=%d vm.slot=%d",
+			cfg.HostIP, cfg.SSHPort, cfg.PortStart, cfg.PortEnd, cfg.SlotNumber)
 	}
 
 	return cmdline
