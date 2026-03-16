@@ -115,6 +115,8 @@ make
 
 # virtio is the default guest fs share type due to performance reasons, you will need to build this
 # you can clone this anywhere at the moment
+# IMPORTANT NOTE: DO NOT USE SYSTEM virtiofsd.
+#  homura needs a patched virtiofsd that can do granular sharing:
 git clone https://github.com/lun-4/virtiofsd
 cd virtiofsd && cargo build --release --features http-control
 cp ./target/release/virtiofsd ~/.cache/homura/bin/virtiofsd
