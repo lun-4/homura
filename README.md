@@ -1,12 +1,12 @@
 # homura
 
-claude code web for terminal addicts w/ git worktrees
+claude code web for terminal addicts w/ git worktrees (also sandboxing freaks)
 
 problem statement: Claude Code on the Web UI sucks ass.
-0. the idea is cool! claude on "YOLO" mode while also being in the isolated env is very cool
-1. does not support setting a custom docker image as an environment, so everything must go through Claude
-2. impossible to install Elixir on it, it was insane horror and it didn't work
-3. very bad latency, general Anthropic UI jank
+ - the idea is cool! claude on "YOLO" mode while also being in the isolated cloud env is very cool
+ - does not support setting a custom docker image as an environment, so everything must be installed through Claude
+ - impossible to install Elixir on it, it was insane horror and it didn't work
+ - very bad latency, general Anthropic UI jank
 
 _lol_
 
@@ -64,19 +64,19 @@ homura rm
 
 this is my freaky answer to sandboxing. there are issues with other sandboxing solutions
 (claude code's bwrap-based sandbox, the remote solutions like exe.dev/sprites/shellbox, etc)
-and i'll definitely write an article on it, but for now this is what i got.
+and i have written an article on it: [adventures in sandboxing](https://l4.pm/wiki/Personal%20Wiki/AI%20stuff/adventures%20in%20sandboxing.html).
 
 `homura vm` is a little tool that will:
 - download a linux kernel from Alpine
 - download some kernel modules to make a functional VM
-- download and assemble an Alpine root fs with Docker
+- download and assemble an Ubuntu root fs with Docker
 - repackage it all together into an ext4 filesystem image
 - granular and dynamic mirroring of the host filesystem into the guest (through virtiofs)
   - because of virtiofs you need a high max fd limit. you can do this via a sudo shell alias, as an example `maxfd="sudo -E bash -c 'ulimit -n 524288 && exec sudo -Eu luna fish'"`
 - make QEMU start with that image with configured SSH and networking via `passt`
   - each VM gets allocated a 10 port range starting from 10000, so the first VM gets 10000-10009 (10000 being SSH), next VM gets 10010-10019, etc
 
-the reasons why those are things that i have to do would be best described in an article, for now here's the setup
+the reasons why those are things that i do this are in the article, for now here's the setup
 
 ### requirements
 
