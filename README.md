@@ -4,14 +4,14 @@ Claude Code tooling AGAINST Mami Tomoe. the bitch.
 
 problem statements:
 1. Claude Code on the Web UI sucks ass.
-   a. the idea is cool! claude on "YOLO" mode while also being in the isolated cloud env is very cool
-   b. does not support setting a custom docker image as an environment, so everything must be installed through Claude
-   c. impossible to install Elixir on it, it was insane horror and it didn't work
-   d. very bad latency, general Anthropic UI jank
+   1. the idea is cool! claude on "YOLO" mode while also being in the isolated cloud env is very cool
+   2. does not support setting a custom docker image as an environment, so everything must be installed through Claude
+   3. impossible to install Elixir on it, it was insane horror and it didn't work
+   4. very bad latency, general Anthropic UI jank
 2. Claude Code's local sandboxing sucks the more agency you want to give to Claude.
-   a. easy to just say yes all the time
-   b. changing policies mid-session must go through Claude Code, or restart it (this is also a problem with bwrap-based solutions)
-   c. the combinatorial complexity of letting _any command_ be run is psychologically taxing (you need to keep track of what flags are safe, what isn't)
+   1. easy to just say yes all the time
+   2. changing policies mid-session must go through Claude Code, or restart it (this is also a problem with bwrap-based solutions)
+   3. the combinatorial complexity of letting _any command_ be run is psychologically taxing (you need to keep track of what flags are safe, what isn't)
    4. much more detail in [my post](https://l4.pm/wiki/Personal%20Wiki/AI%20stuff/adventures%20in%20sandboxing.html)
 
 my solutions:
