@@ -1,16 +1,29 @@
 # homura
 
-claude code web for terminal addicts w/ git worktrees (also sandboxing freaks)
+Claude Code tooling AGAINST Mami Tomoe. the bitch.
 
-problem statement: Claude Code on the Web UI sucks ass.
- - the idea is cool! claude on "YOLO" mode while also being in the isolated cloud env is very cool
- - does not support setting a custom docker image as an environment, so everything must be installed through Claude
- - impossible to install Elixir on it, it was insane horror and it didn't work
- - very bad latency, general Anthropic UI jank
+problem statements:
+1. Claude Code on the Web UI sucks ass.
+   a. the idea is cool! claude on "YOLO" mode while also being in the isolated cloud env is very cool
+   b. does not support setting a custom docker image as an environment, so everything must be installed through Claude
+   c. impossible to install Elixir on it, it was insane horror and it didn't work
+   d. very bad latency, general Anthropic UI jank
+2. Claude Code's local sandboxing sucks the more agency you want to give to Claude.
+   a. easy to just say yes all the time
+   b. changing policies mid-session must go through Claude Code, or restart it (this is also a problem with bwrap-based solutions)
+   c. the combinatorial complexity of letting _any command_ be run is psychologically taxing (you need to keep track of what flags are safe, what isn't)
+   4. much more detail in [my post](https://l4.pm/wiki/Personal%20Wiki/AI%20stuff/adventures%20in%20sandboxing.html)
 
-_lol_
+my solutions:
+1. easier worktree management, all worktrees stored in `<repo>/.homura/<branch>`, so if you don't like the tool you don't need to reverse engineer it to do your work
+2. VM-based sandboxing
 
 ## how get
+
+you can run homura without interacting with the `homura vm` subcommand (which needs a lot more dependencies).
+think of the `vm` subcommand as a superset of the base featureset.
+
+if you just want worktree management, install `go` and follow these instructions:
 
 ```sh
 git clone https://github.com/lun-4/homura
@@ -21,7 +34,7 @@ make
 mv ./homura ~/.local/bin
 ```
 
-## how use
+## how to use
 
 ```sh
 cd myrepo
@@ -31,11 +44,12 @@ cd myrepo
 # just operate inside the worktree (if you want full isolation guarantees, look into `homura vm`)
 homura clone fix-indices
 
-# list all branches. you can create more than one concurrently
+# list all branches. you can have more than one branch
 homura ls
 
-# running `homura clone` sets a default branch to the newly created one.
+# running `homura clone` sets a "default branch" internally to the newly created one.
 # that means you don't need to give the branch name to some other commands (all optional)
+# this is equivalent to `cd .homura/<branch> && $SHELL`
 homura sh [branch]
 
 # in the inner shell, you can do whatever you want.
@@ -45,7 +59,7 @@ homura sh [branch]
 claude
 
 # since it's a worktree, commits go to the same repo!
-# no need to sync via remotes
+# no need to sync via separate git remotes
 git add ...
 git commit ...
 git push ...
