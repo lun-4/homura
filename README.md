@@ -1,6 +1,6 @@
 # homura
 
-Claude Code tooling AGAINST Mami Tomoe. the bitch.
+a tool for isolated coding agents with optional VM sandboxing (on top of dynamic host<->guest fs sharing).
 
 problem statements:
 1. Claude Code on the Web UI sucks ass.
