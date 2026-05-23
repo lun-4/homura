@@ -406,6 +406,23 @@ func buildInitramfs(paths *ImagePaths) error {
 	return nil
 }
 
+// detectContainerCmd returns the container CLI to use ("docker" or "podman").
+// Honors HOMURA_CONTAINER_CMD if set. Otherwise prefers docker, falls back to podman.
+func detectContainerCmd() (string, error) {
+	if override := os.Getenv("HOMURA_CONTAINER_CMD"); override != "" {
+		if _, err := exec.LookPath(override); err != nil {
+			return "", fmt.Errorf("HOMURA_CONTAINER_CMD=%q not found in PATH: %w", override, err)
+		}
+		return override, nil
+	}
+	for _, candidate := range []string{"docker", "podman"} {
+		if _, err := exec.LookPath(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("neither docker nor podman found in PATH; install one or set HOMURA_CONTAINER_CMD")
+}
+
 // cleanupStaleContainers removes any leftover homura containers from previous failed builds
 func cleanupStaleContainers(dockerCmd string) {
 	// List all containers (running and stopped) with names starting with "homura-temp-"
@@ -428,7 +445,7 @@ func cleanupStaleContainers(dockerCmd string) {
 	}
 }
 
-// buildRootfs creates an ext4 rootfs image using Docker and mke2fs -d
+// buildRootfs creates an ext4 rootfs image using Docker or Podman and mke2fs -d
 func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 	slog.Info("Building rootfs image")
 
@@ -443,7 +460,11 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 		return fmt.Errorf("failed to read SSH public key: %w", err)
 	}
 
-	dockerCmd := "docker"
+	dockerCmd, err := detectContainerCmd()
+	if err != nil {
+		return err
+	}
+	slog.Info("Using container engine", "cmd", dockerCmd)
 
 	// Clean up any stale containers from previous failed builds
 	cleanupStaleContainers(dockerCmd)
@@ -539,9 +560,9 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 		return fmt.Errorf("failed to copy test-fs source: %w", err)
 	}
 
-	// Build Docker base image if needed
+	// Build base container image if needed
 	if !baseImageExists {
-		slog.Info("Building Docker base image (this may take a few minutes)")
+		slog.Info("Building container base image (this may take a few minutes)")
 		cmd := exec.Command(dockerCmd, "build",
 			"--build-arg", fmt.Sprintf("SSH_PUB_KEY=%s", strings.TrimSpace(string(sshPubKey))),
 			"-t", baseImageName,
@@ -549,7 +570,7 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 		cmd.Stdout = os.Stderr
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("docker build failed: %w", err)
+			return fmt.Errorf("%s build failed: %w", dockerCmd, err)
 		}
 
 		// Get the new base image ID
@@ -566,7 +587,7 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 			slog.Debug("Using custom rootfs filename", "filename", newRootfsFilename, "hash", combinedHash)
 		}
 	} else {
-		slog.Info("Using cached Docker base image")
+		slog.Info("Using cached container base image")
 	}
 
 	// Handle custom Dockerfile
@@ -632,7 +653,7 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 	containerName := fmt.Sprintf("homura-temp-%x", sha256.Sum256([]byte(tarPath)))
 	cmd := exec.Command(dockerCmd, "create", "--name", containerName, finalImageName)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("docker create failed: %w", err)
+		return fmt.Errorf("%s create failed: %w", dockerCmd, err)
 	}
 	defer exec.Command(dockerCmd, "rm", "-f", containerName).Run() // Force remove to handle stuck containers
 
@@ -645,7 +666,7 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 	cmd = exec.Command(dockerCmd, "export", containerName)
 	cmd.Stdout = tarFile
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("docker export failed: %w", err)
+		return fmt.Errorf("%s export failed: %w", dockerCmd, err)
 	}
 	tarFile.Close()
 
