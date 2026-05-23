@@ -211,3 +211,28 @@ RUN mix local.rebar --force
 RUN echo 'export PATH="/mnt/host/home/luna/.config/homura/custom-vm-bin:$PATH"' >> /etc/profile
 RUN echo 'set -gx PATH /mnt/host/home/luna/.config/homura/custom-vm-bin $PATH' >> /root/.config/fish/config.fish
 ```
+
+### troubleshooting
+
+#### console floods with `Flow N (UDP flow): Unable to determine local address: Permission denied`
+
+if you're on Fedora (or any distro that ships `passt-selinux`) with SELinux in enforcing mode, the policy will confine
+passt into the `passt_t` domain and deny the `connect()`/`getsockname()` calls passt uses to set up outbound UDP flows.
+TCP still works, but anything that needs UDP (DNS in particular) will hang inside the guest.
+
+confirm with:
+
+```sh
+ps -eo pid,label,cmd | grep '[p]asst'
+# if the label is `...:passt_t:...`, you're hitting this
+```
+
+fix by marking just the `passt_t` domain permissive (SELinux stays enforcing for everything else):
+
+```sh
+sudo semanage permissive -a passt_t
+```
+
+reversible at any time with `sudo semanage permissive -d passt_t`. you do not need to restart anything — newly-launched passts pick up the new mode immediately.
+
+if you'd rather not keep the SELinux policy around for passt at all, `sudo dnf remove passt-selinux` also works.
