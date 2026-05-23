@@ -262,6 +262,8 @@ The build system creates VM images in `~/.cache/homura/v{VERSION}/vm-images/alpi
    - Boot scripts embedded in `/etc/local.d/`
    - Guest binaries copied to `/usr/local/bin/`
 
+**Container engine detection:** `buildRootfs` calls `detectContainerCmd` to choose the CLI. Order: `$HOMURA_CONTAINER_CMD` if set, else `docker` if in `PATH`, else `podman`. If neither is present the build aborts with a clear error. Set `HOMURA_CONTAINER_CMD=podman` to force podman on hosts that have both.
+
 Relevant files: `internal/vm/build.go`, `internal/vm/resources/Dockerfile`, `internal/vm/resources/init`
 
 ### Networking (Passt)

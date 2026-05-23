@@ -83,7 +83,7 @@ and i have written an article on it: [adventures in sandboxing](https://l4.pm/wi
 `homura vm` is a little tool that will:
 - download a linux kernel from Alpine
 - download some kernel modules to make a functional VM
-- download and assemble an Ubuntu root fs with Docker
+- download and assemble an Ubuntu root fs with Docker or Podman
 - repackage it all together into an ext4 filesystem image
 - granular and dynamic mirroring of the host filesystem into the guest (through virtiofs)
   - because of virtiofs you need a high max fd limit. you can do this via a sudo shell alias, as an example `maxfd="sudo -E bash -c 'ulimit -n 524288 && exec sudo -Eu luna fish'"`
