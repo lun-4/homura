@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-homura is a CLI tool for managing temporary git repository copies. It creates isolated copies of your repository in `.homura/<branch-name>/` directories, allowing you to work on multiple branches concurrently without using git worktrees or submodules. Each copy is a full clone where you can run multiple instances of Claude Code, commit, push, and work independently.
+homura is a CLI tool for managing git worktrees. It creates worktrees in `.homura/<branch-name>/` directories, allowing you to work on multiple branches concurrently. Each worktree shares the original repository's `.git` object store but has its own checked-out branch, so you can run multiple instances of Claude Code, commit, push, and work independently.
 
 ## Build and Run
 
@@ -22,16 +22,17 @@ mv ./homura ~/.local/bin
 ## Commands
 
 ```bash
-# Clone current repo to .homura/<branch-name>/ and set as default
+# Create a worktree at .homura/<branch-name>/ and set as default.
+# If the branch already exists, checks it out; otherwise creates a new branch.
 homura clone <branch-name>
 
-# Open shell in copy (uses default branch if not specified)
+# Open shell in worktree (uses default branch if not specified)
 homura sh [branch-name]
 
-# List all copies and show default branch
+# List all worktrees and show default branch
 homura ls
 
-# Remove copy (uses default branch if not specified)
+# Remove worktree (uses default branch if not specified)
 homura rm [branch-name]
 homura rm -f [branch-name]  # Force removal even with uncommitted changes
 ```
@@ -440,9 +441,9 @@ Relevant files: `internal/vm/snapshot.go`
 - State is loaded/saved via `config.LoadState()` and `config.SaveState()`
 
 ### Directory Structure
-- All copies live under `.homura/<branch-name>/` in the repository root
-- The `.homura` directory itself is excluded from copies to prevent recursion
-- Each copy is a complete clone of the original repository with the specified branch checked out
+- All worktrees live under `.homura/<branch-name>/` in the repository root
+- Each worktree is a `git worktree` of the parent repo with the specified branch checked out (shares the parent's `.git` object store)
+- `git.GetRepoRoot()` resolves a `.homura/<branch>/` working directory back to the parent repo root, so homura commands operate on the main repo rather than nesting `.homura` directories
 
 ### Key Packages
 - `cmd/homura/main.go`: CLI entry point using cobra for command routing
@@ -451,9 +452,9 @@ Relevant files: `internal/vm/snapshot.go`
 - `internal/git/git.go`: Git operations (status checks, branch checkout, path utilities)
 
 ### Core Behaviors
-- `clone` copies the entire repo excluding `.homura`, checks out the branch, and sets it as default
-- `sh` spawns `$SHELL` in the copy directory (defaults to `/bin/sh`)
-- `rm` prevents removal of copies with uncommitted changes unless `-f` is used
+- `clone` runs `git worktree add` for the branch and sets it as default. If the branch already exists, it checks it out (`git worktree add <path> <branch>`); otherwise it creates a new branch (`git worktree add -b <branch> <path>`). Errors if `.homura/<branch>/` already exists on disk, or if git refuses because the branch is already checked out in another worktree. Also drops a `CLAUDE.local.md` into the worktree and adds it to the worktree's `.git/info/exclude`
+- `sh` spawns `$SHELL` in the worktree directory (defaults to `/bin/sh`)
+- `rm` runs `git worktree remove`; it prevents removal of worktrees with uncommitted changes unless `-f` is used
 - All commands use slog for structured logging to stderr
 
 ### SQLite Usage
