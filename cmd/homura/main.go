@@ -24,11 +24,15 @@ var rootCmd = &cobra.Command{
 }
 
 var cloneCmd = &cobra.Command{
-	Use:   "clone <branch-name>",
+	Use:   "clone <branch-name> [base]",
 	Short: "Copy current repo to .homura/<branch-name>/",
-	Args:  cobra.ExactArgs(1),
+	Args:  cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return commands.Clone(args[0])
+		base := ""
+		if len(args) > 1 {
+			base = args[1]
+		}
+		return commands.Clone(args[0], base)
 	},
 }
 

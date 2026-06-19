@@ -24,7 +24,9 @@ mv ./homura ~/.local/bin
 ```bash
 # Create a worktree at .homura/<branch-name>/ and set as default.
 # If the branch already exists, checks it out; otherwise creates a new branch.
-homura clone <branch-name>
+# Optional [base] forks a NEW branch from that commit-ish (branch/tag/commit)
+# instead of current HEAD; it errors if the branch already exists.
+homura clone <branch-name> [base]
 
 # Open shell in worktree (uses default branch if not specified)
 homura sh [branch-name]

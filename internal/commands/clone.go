@@ -8,8 +8,11 @@ import (
 	"github.com/lun-4/homura/internal/git"
 )
 
-// Clone creates a new git worktree in .homura/<branch-name>/
-func Clone(branchName string) error {
+// Clone creates a new git worktree in .homura/<branch-name>/.
+// If base is non-empty and a new branch is being created, the branch forks from
+// that commit-ish instead of the repository's current HEAD. base is only valid
+// when creating a new branch.
+func Clone(branchName, base string) error {
 	// Get current working directory
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -38,6 +41,9 @@ func Clone(branchName string) error {
 
 	// Check if branch already exists
 	if git.BranchExists(repoRoot, branchName) {
+		if base != "" {
+			return fmt.Errorf("branch %q already exists; the base argument only applies when creating a new branch", branchName)
+		}
 		// Use existing branch
 		fmt.Printf("Creating worktree for existing branch '%s' at %s...\n", branchName, destPath)
 		if err := git.WorktreeAddExisting(repoRoot, destPath, branchName); err != nil {
@@ -45,8 +51,12 @@ func Clone(branchName string) error {
 		}
 	} else {
 		// Create new branch with worktree
-		fmt.Printf("Creating worktree with new branch '%s' at %s...\n", branchName, destPath)
-		if err := git.WorktreeAdd(repoRoot, destPath, branchName); err != nil {
+		if base != "" {
+			fmt.Printf("Creating worktree with new branch '%s' from '%s' at %s...\n", branchName, base, destPath)
+		} else {
+			fmt.Printf("Creating worktree with new branch '%s' at %s...\n", branchName, destPath)
+		}
+		if err := git.WorktreeAdd(repoRoot, destPath, branchName, base); err != nil {
 			return fmt.Errorf("failed to create worktree: %w", err)
 		}
 	}

@@ -118,9 +118,15 @@ func GetCopyPath(repoRoot, branchName string) string {
 	return filepath.Join(GetHomuraDir(repoRoot), branchName)
 }
 
-// WorktreeAdd creates a new git worktree at the specified path with a new branch
-func WorktreeAdd(repoPath, worktreePath, branchName string) error {
-	cmd := exec.Command("git", "worktree", "add", "-b", branchName, worktreePath)
+// WorktreeAdd creates a new git worktree at the specified path with a new branch.
+// If base is non-empty, the new branch forks from that commit-ish (branch, tag, or
+// commit); otherwise it forks from the repository's current HEAD.
+func WorktreeAdd(repoPath, worktreePath, branchName, base string) error {
+	args := []string{"worktree", "add", "-b", branchName, worktreePath}
+	if base != "" {
+		args = append(args, base)
+	}
+	cmd := exec.Command("git", args...)
 	cmd.Dir = repoPath
 	slog.Info("running git command", "cmd", "git", "args", cmd.Args[1:], "dir", repoPath)
 	output, err := cmd.CombinedOutput()
