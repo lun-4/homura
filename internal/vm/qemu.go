@@ -78,8 +78,9 @@ func BuildQEMUArgs(cfg *QEMUConfig) []string {
 	}
 
 	args = append(args,
-		// Rootfs as virtio-blk device (PCI transport for microvm)
-		"-drive", fmt.Sprintf("id=root,file=%s,format=raw,if=none", cfg.RootfsPath),
+		// Rootfs as virtio-blk device (PCI transport for microvm).
+		// The ephemeral disk is a qcow2 overlay over the read-only base image.
+		"-drive", fmt.Sprintf("id=root,file=%s,format=qcow2,if=none", cfg.RootfsPath),
 		"-device", "virtio-blk-pci,drive=root",
 
 		// Passt networking via Unix socket (PCI transport for microvm)

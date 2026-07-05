@@ -81,6 +81,7 @@ func NewVM(shareMode ShareMode, workDir string, stateDirBase string) (*VM, error
 		shareMode = ShareModeVirtioFS
 	}
 	slog.Info("Initializing new VM instance", "share_mode", shareMode, "workdir", workDir)
+	newVMStart := time.Now()
 
 	// Check if passt is available
 	if !IsPasstAvailable() {
@@ -188,6 +189,7 @@ func NewVM(shareMode ShareMode, workDir string, stateDirBase string) (*VM, error
 	var virtiofsManager *VirtiofsManager
 
 	// Start filesystem sharing daemon based on mode
+	fsDaemonStart := time.Now()
 	switch shareMode {
 	case ShareModeVirtioFS:
 		// Check file descriptor limit before starting virtiofsd
@@ -325,6 +327,7 @@ func NewVM(shareMode ShareMode, workDir string, stateDirBase string) (*VM, error
 		slotParams.NinePSocket = ninepControlSock
 		slotParams.NinePPort = ninepControlPort
 	}
+	fsDaemonTook := time.Since(fsDaemonStart)
 
 	// Helper to clean up on error
 	cleanupOnError := func() {
@@ -338,11 +341,13 @@ func NewVM(shareMode ShareMode, workDir string, stateDirBase string) (*VM, error
 	}
 
 	// Allocate VM slot
+	slotAllocStart := time.Now()
 	slot, err := AllocateVMSlot(slotParams)
 	if err != nil {
 		cleanupOnError()
 		return nil, fmt.Errorf("failed to allocate VM slot: %w", err)
 	}
+	slotAllocTook := time.Since(slotAllocStart)
 
 	// Create passt manager
 	passtMgr, err := NewPasstManager(stateDir, slot)
@@ -377,7 +382,10 @@ func NewVM(shareMode ShareMode, workDir string, stateDirBase string) (*VM, error
 		"ip", slot.IPAddress,
 		"port_range", fmt.Sprintf("%d-%d", slot.PortStart, slot.PortEnd),
 		"ssh_key", sshPubPath,
-		"share_mode", shareMode)
+		"share_mode", shareMode,
+		"fs_daemon_took", fsDaemonTook,
+		"slot_alloc_took", slotAllocTook,
+		"total_took", time.Since(newVMStart))
 
 	return vm, nil
 }
@@ -392,6 +400,7 @@ type StartOptions struct {
 // Start starts the VM
 func (vm *VM) Start(opts StartOptions) error {
 	slog.Info("Starting VM", "foreground", opts.Foreground)
+	startBegin := time.Now()
 
 	// Run pre-start snapshot if configured
 	vmConfig, err := LoadVMConfig()
@@ -406,23 +415,29 @@ func (vm *VM) Start(opts StartOptions) error {
 	}
 
 	// Start passt first
+	phaseStart := time.Now()
 	if err := vm.PasstManager.Start(); err != nil {
 		return fmt.Errorf("failed to start passt: %w", err)
 	}
+	passtTook := time.Since(phaseStart)
 
 	// Ensure images are downloaded and built
+	phaseStart = time.Now()
 	images, err := EnsureImages(vm.SSHPubPath)
 	if err != nil {
 		return fmt.Errorf("failed to ensure images: %w", err)
 	}
 	vm.Images = images
+	imagesTook := time.Since(phaseStart)
 
 	// Create ephemeral disk
-	ephemeralDisk := filepath.Join(vm.StateDir, "rootfs-ephemeral.ext4")
-	if err := CreateEphemeralDisk(images.RootfsPath, ephemeralDisk, "10G"); err != nil {
+	phaseStart = time.Now()
+	ephemeralDisk := filepath.Join(vm.StateDir, "rootfs-ephemeral.qcow2")
+	if err := CreateEphemeralDisk(images.RootfsPath, ephemeralDisk); err != nil {
 		return fmt.Errorf("failed to create ephemeral disk: %w", err)
 	}
 	vm.EphemeralDisk = ephemeralDisk
+	diskTook := time.Since(phaseStart)
 
 	// Build QEMU configuration
 	cfg := &QEMUConfig{
@@ -484,7 +499,11 @@ func (vm *VM) Start(opts StartOptions) error {
 		return fmt.Errorf("failed to start QEMU: %w", err)
 	}
 
-	slog.Info("QEMU process started", "pid", vm.QEMUCmd.Process.Pid)
+	slog.Info("QEMU process started", "pid", vm.QEMUCmd.Process.Pid,
+		"passt_took", passtTook,
+		"images_took", imagesTook,
+		"disk_took", diskTook,
+		"total_took", time.Since(startBegin))
 
 	// Record the QEMU PID now that it's known (AllocateVMSlot ran before QEMU
 	// was launched, so it couldn't have this value); harmless in fg mode.

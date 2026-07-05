@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
@@ -789,8 +790,13 @@ elif grep -q "p9.token=" /proc/cmdline; then
     # Start 9pfuse in background
     /usr/local/bin/9pfuse -server 10.0.2.2:$P9_PORT -mount /mnt/host &
 
-    # Wait a moment for mount to complete
-    sleep 1
+    # Poll for the mount instead of a fixed sleep (this service runs
+    # Before=ssh.service, so every wasted moment here delays SSH)
+    TRIES=0
+    while ! mountpoint -q /mnt/host && [ $TRIES -lt 100 ]; do
+        sleep 0.05
+        TRIES=$((TRIES + 1))
+    done
 
     if mountpoint -q /mnt/host; then
         echo "9p filesystem mounted at /mnt/host (FUSE) on port $P9_PORT"
@@ -811,22 +817,21 @@ if mountpoint -q /mnt/host; then
         CLAUDE_JSON="/mnt/host${HOST_HOME}/.claude.json"
         echo "Looking for CLAUDE_DIR='$CLAUDE_DIR' CLAUDE_JSON='$CLAUDE_JSON'"
         RETRY=0
-        while [ $RETRY -lt 5 ]; do
+        while [ $RETRY -lt 25 ]; do
             # Check if at least one claude config exists, break if found
             if [ -d "$CLAUDE_DIR" ] || [ -f "$CLAUDE_JSON" ]; then
                 echo "Found claude config on attempt $RETRY"
                 break
             fi
             RETRY=$((RETRY + 1))
-            echo "Waiting for filesystem to serve claude config (attempt $RETRY/5)..."
-            # Debug: list what's visible
-            echo "Contents of /mnt/host${HOST_HOME}/:"
-            ls -la "/mnt/host${HOST_HOME}/" 2>&1 || echo "(ls failed)"
-            sleep 1
+            echo "Waiting for filesystem to serve claude config (attempt $RETRY/25)..."
+            sleep 0.2
         done
 
-        if [ $RETRY -eq 5 ]; then
+        if [ $RETRY -eq 25 ]; then
             echo "WARNING: Timed out waiting for claude config"
+            echo "Contents of /mnt/host${HOST_HOME}/:"
+            ls -la "/mnt/host${HOST_HOME}/" 2>&1 || echo "(ls failed)"
         fi
 
         # Symlink .claude.json
@@ -924,7 +929,10 @@ SWAPSIZE=1G
 # Only create if it doesn't exist
 if [ ! -f "$SWAPFILE" ]; then
     echo "Creating ${SWAPSIZE} swap file..."
-    dd if=/dev/zero of="$SWAPFILE" bs=1M count=1024
+    # fallocate is near-instant on ext4 (no holes, safe for swap); the disk is
+    # ephemeral so this runs on every boot - writing 1GiB of zeros with dd
+    # would compete with all other boot I/O. dd stays as a fallback.
+    fallocate -l "$SWAPSIZE" "$SWAPFILE" || dd if=/dev/zero of="$SWAPFILE" bs=1M count=1024
     chmod 600 "$SWAPFILE"
     mkswap "$SWAPFILE"
 fi
@@ -1137,8 +1145,15 @@ if [ "$ROOTFS_KB" -lt "$MIN_ROOTFS_KB" ]; then
 fi
 truncate -s "${ROOTFS_KB}K" "%s"
 mke2fs -q -t ext4 -O "^metadata_csum,^64bit" -E root_owner=0:0 -L rootfs -d "%s" "%s"
+
+# 8. Grow the image to its final runtime size once, at build time, so that
+# per-start disk prep is a metadata-only qcow2 overlay (no copy, no resize2fs).
+# The file stays sparse, so cache disk usage barely changes.
+truncate -s %s "%s"
+resize2fs "%s"
 `, stagingDir, paths.SSHHostKeysDir, stagingDir,
 		stagingDir, tmpRootfs, stagingDir, tmpRootfs,
+		EphemeralDiskSize, tmpRootfs, tmpRootfs,
 	)
 
 	// Write the script to a temp file and run it under fakeroot
@@ -1165,36 +1180,29 @@ mke2fs -q -t ext4 -O "^metadata_csum,^64bit" -E root_owner=0:0 -L rootfs -d "%s"
 	return nil
 }
 
-// CreateEphemeralDisk creates a sparse copy of the rootfs and resizes it
-func CreateEphemeralDisk(basePath, destPath string, size string) error {
-	slog.Info("Creating ephemeral disk", "base", basePath, "dest", destPath, "size", size)
+// EphemeralDiskSize is the runtime size of the guest rootfs. The base image
+// is grown (sparsely) to this size once at build time, so per-start disk prep
+// never needs to copy or resize anything.
+const EphemeralDiskSize = "10G"
 
-	// Sparse copy
-	cmd := exec.Command("cp", "--sparse=always", basePath, destPath)
+// CreateEphemeralDisk creates a qcow2 overlay backed by the (read-only) base
+// rootfs image. The base is already at its final runtime size, so this is a
+// near-instant metadata-only operation; guest writes land in the overlay.
+func CreateEphemeralDisk(basePath, destPath string) error {
+	start := time.Now()
+
+	cmd := exec.Command("qemu-img", "create", "-q", "-f", "qcow2", "-b", basePath, "-F", "raw", destPath)
 	cmd.Stdout = ChildOutput
 	cmd.Stderr = ChildOutput
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("sparse copy failed: %w", err)
-	}
-
-	// Resize
-	cmd = exec.Command("truncate", "-s", size, destPath)
-	cmd.Stdout = ChildOutput
-	cmd.Stderr = ChildOutput
-	if err := cmd.Run(); err != nil {
+		if _, lookErr := exec.LookPath("qemu-img"); lookErr != nil {
+			return fmt.Errorf("qemu-img not found in PATH (usually packaged as qemu-utils / qemu-img): %w", err)
+		}
 		os.Remove(destPath)
-		return fmt.Errorf("truncate failed: %w", err)
+		return fmt.Errorf("qemu-img create overlay failed: %w", err)
 	}
 
-	cmd = exec.Command("resize2fs", destPath)
-	cmd.Stdout = ChildOutput
-	cmd.Stderr = ChildOutput
-	if err := cmd.Run(); err != nil {
-		os.Remove(destPath)
-		return fmt.Errorf("resize2fs failed: %w", err)
-	}
-
-	slog.Info("Ephemeral disk created successfully")
+	slog.Info("Ephemeral disk overlay created", "base", basePath, "dest", destPath, "took", time.Since(start))
 	return nil
 }
 

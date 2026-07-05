@@ -34,16 +34,23 @@ if [ ! -b /dev/vda ]; then
     exec /bin/sh
 fi
 
-# Give it a moment to settle
-sleep 0.5
-
 echo "Mounting /dev/vda to /newroot..."
-mount -t ext4 /dev/vda /newroot
-if [ $? -ne 0 ]; then
-    echo "ERROR: Failed to mount /dev/vda"
-    echo "Dropping to shell..."
-    exec /bin/sh
-fi
+# Retry instead of a fixed settle sleep: the mount usually succeeds on the
+# first try right after the device node appears.
+count=0
+until mount -t ext4 /dev/vda /newroot 2>/dev/null; do
+    count=$((count + 1))
+    if [ $count -ge 20 ]; then
+        # Once more with the error visible; drop to a shell if it still fails.
+        mount -t ext4 /dev/vda /newroot || {
+            echo "ERROR: Failed to mount /dev/vda"
+            echo "Dropping to shell..."
+            exec /bin/sh
+        }
+        break
+    fi
+    sleep 0.1
+done
 
 echo "Configuring network..."
 ip link set lo up
