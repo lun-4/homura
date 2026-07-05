@@ -99,6 +99,19 @@ You can configure paths to be automatically exposed every time a VM starts by cr
 
 **Note:** The current working directory is always exposed as read-write, regardless of this config. The `allowPaths` setting adds *additional* persistent paths.
 
+## VM State Directory
+
+Per-VM state (the 10G ephemeral rootfs disk, passt/virtiofs sockets, generated SSH keys) lives in a `homura-vm-*` directory under the system temp dir by default. If `/tmp` is tmpfs, every block the guest writes to its disk becomes resident RAM — configure a disk-backed location to run multiple VMs without RAM pressure:
+
+```json
+{
+  "configVersion": 1,
+  "stateDir": "/home.orig/luna/homura-vms"
+}
+```
+
+The `HOMURA_VM_STATE_DIR` environment variable overrides the config. Stale state directories from crashed VMs are removed automatically by the slot cleanup that runs on every VM start / `homura vm ls`.
+
 ## Docker Support
 
 Docker is supported inside homura VMs. The VM includes all necessary kernel modules and dependencies.

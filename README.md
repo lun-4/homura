@@ -168,6 +168,7 @@ homura will check `~/.config/homura/vm.json` and you can define things here:
   - useful to put some tools or scripts to configure claude properly with yolo mode
   - paths are `<host path>:<ro or rw>`
 - `snapshot` is a list of paths that will be snapshotted daily once you start a vm, this is a best-effort snapshot (archives the respective folders in a single .tar)
+- `stateDir` is the base directory for per-VM state, including the 10G ephemeral rootfs disk. defaults to the system temp dir (`/tmp`). if your `/tmp` is tmpfs, everything the guest writes to its disk becomes resident RAM — point this at real disk-backed storage to run multiple VMs without RAM pressure. the `HOMURA_VM_STATE_DIR` environment variable overrides this setting.
 
 ```json
 {
@@ -178,7 +179,8 @@ homura will check `~/.config/homura/vm.json` and you can define things here:
   "snapshot": [
     "/home/luna/.claude",
     "/home/luna/.claude.json"
-  ]
+  ],
+  "stateDir": "/home.orig/luna/homura-vms"
 }
 ```
 

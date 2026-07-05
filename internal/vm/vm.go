@@ -111,10 +111,29 @@ func NewVM(shareMode ShareMode) (*VM, error) {
 		extraPaths = vmConfig.GetAllowPaths()
 	}
 
-	// Create temporary state directory
-	stateDir, err := os.MkdirTemp("", "homura-vm-*")
+	// Create per-VM state directory. Defaults to the system temp dir, but can
+	// be pointed at persistent storage (the ephemeral disk lives here, and on
+	// tmpfs /tmp every block the guest writes becomes resident RAM).
+	baseStateDir := os.Getenv("HOMURA_VM_STATE_DIR")
+	if baseStateDir == "" {
+		baseStateDir = vmConfig.GetStateDir()
+	}
+	if baseStateDir != "" {
+		if err := os.MkdirAll(baseStateDir, 0o755); err != nil {
+			return nil, fmt.Errorf("failed to create state base directory %s: %w", baseStateDir, err)
+		}
+	}
+	stateDir, err := os.MkdirTemp(baseStateDir, "homura-vm-*")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create state directory: %w", err)
+	}
+
+	// Unix socket paths (sun_path) are limited to ~108 bytes; passt.sock and
+	// virtiofs.sock live in stateDir, so fail early if the path is too deep
+	if longest := filepath.Join(stateDir, "virtiofs.sock"); len(longest) > 104 {
+		os.RemoveAll(stateDir)
+		return nil, fmt.Errorf("state directory path too long for unix sockets (%d > 104 chars): %s\n"+
+			"Configure a shorter stateDir in ~/.config/homura/vm.json", len(longest), longest)
 	}
 
 	// Construct passt socket path (slot allocation comes later)

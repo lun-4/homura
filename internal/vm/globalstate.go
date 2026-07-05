@@ -3,7 +3,10 @@ package vm
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -140,21 +143,38 @@ func CleanupStaleSlots() error {
 	defer db.Close()
 
 	// Get all slots
-	rows, err := db.Query("SELECT slot_number, vm_pid FROM vm_slots")
+	rows, err := db.Query("SELECT slot_number, vm_pid, passt_socket_path FROM vm_slots")
 	if err != nil {
 		return fmt.Errorf("failed to query slots: %w", err)
 	}
 	defer rows.Close()
 
 	var stalePIDs []int
+	var staleStateDirs []string
 	for rows.Next() {
 		var slotNumber, vmPID int
-		if err := rows.Scan(&slotNumber, &vmPID); err != nil {
+		var passtSocketPath string
+		if err := rows.Scan(&slotNumber, &vmPID, &passtSocketPath); err != nil {
 			return fmt.Errorf("failed to scan row: %w", err)
 		}
 
 		if !isPIDAlive(vmPID) {
 			stalePIDs = append(stalePIDs, slotNumber)
+			staleStateDirs = append(staleStateDirs, filepath.Dir(passtSocketPath))
+		}
+	}
+
+	// Remove dead VMs' state directories before dropping their rows, so a
+	// failed removal is retried on the next cleanup. Matters when stateDir is
+	// configured to persistent storage, where crashed VMs' ephemeral disks
+	// would otherwise accumulate (tmpfs /tmp gets wiped on reboot, /home does not)
+	for _, dir := range staleStateDirs {
+		if !strings.HasPrefix(filepath.Base(dir), "homura-vm-") {
+			slog.Warn("Skipping stale state dir with unexpected name", "dir", dir)
+			continue
+		}
+		if err := os.RemoveAll(dir); err != nil {
+			slog.Warn("Failed to remove stale state dir", "dir", dir, "error", err)
 		}
 	}
 

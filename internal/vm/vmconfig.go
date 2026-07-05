@@ -34,6 +34,7 @@ type VMConfig struct {
 	AllowPaths    []string `json:"allowPaths"`    // Paths with optional :ro/:rw suffix
 	Snapshot      []string `json:"snapshot"`      // Paths to snapshot before each VM start
 	MaxSnapshots  *int     `json:"maxSnapshots"`  // Max snapshots to keep (default 7)
+	StateDir      string   `json:"stateDir"`      // Base dir for per-VM state (ephemeral disk, sockets). Empty = system temp dir
 }
 
 // DefaultMaxSnapshots is the default number of snapshots to keep
@@ -53,6 +54,15 @@ func (c *VMConfig) GetSnapshotPaths() []string {
 		return nil
 	}
 	return c.Snapshot
+}
+
+// GetStateDir returns the configured base directory for per-VM state,
+// or "" to use the system temp dir
+func (c *VMConfig) GetStateDir() string {
+	if c == nil {
+		return ""
+	}
+	return c.StateDir
 }
 
 // PathSpec represents a parsed path specification
