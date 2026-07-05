@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -164,18 +165,63 @@ func runVMForeground(shareMode vm.ShareMode, copyPath string) error {
 	return nil
 }
 
+// sshReadyTimeout is how long `homura vm` waits for the guest's sshd before
+// giving up and leaving the user to connect manually.
+const sshReadyTimeout = 5 * time.Second
+
+// waitForSSH polls until sshd behind ip:port presents its banner, or the
+// timeout expires. A plain TCP connect is not enough: passt accepts the
+// host-side connection itself before the guest port is open, so we only
+// count a connection that actually greets us with "SSH-".
+func waitForSSH(ip string, port int, timeout time.Duration) bool {
+	addr := net.JoinHostPort(ip, strconv.Itoa(port))
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, time.Second)
+		if err == nil {
+			conn.SetReadDeadline(time.Now().Add(time.Second))
+			banner := make([]byte, 4)
+			n, _ := conn.Read(banner)
+			conn.Close()
+			if n >= 4 && string(banner[:4]) == "SSH-" {
+				return true
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return false
+}
+
+// execSSH replaces the current process with an interactive ssh session into
+// the VM. The VM itself keeps running after the session ends (daemon mode).
+func execSSH(ip string, port int) error {
+	sshPath, err := exec.LookPath("ssh")
+	if err != nil {
+		return fmt.Errorf("ssh command not found: %w", err)
+	}
+
+	sshArgs := []string{"ssh", "-p", fmt.Sprintf("%d", port), fmt.Sprintf("root@%s", ip)}
+	if err := syscall.Exec(sshPath, sshArgs, os.Environ()); err != nil {
+		return fmt.Errorf("failed to exec ssh: %w", err)
+	}
+
+	// Unreachable if exec succeeds
+	return nil
+}
+
 // runVMDetached starts the VM under the central daemon, streaming build/boot
-// progress to stderr, then returns while the VM keeps running.
+// progress to stderr, then drops the user into an SSH session while the VM
+// keeps running.
 func runVMDetached(shareMode vm.ShareMode, copyPath string) error {
-	// Don't start a second VM for a worktree that already has one; point the
-	// user at the running one instead.
+	// Don't start a second VM for a worktree that already has one; drop the
+	// user into the running one instead.
 	if existing, err := vm.FindVMsByWorkDir(copyPath); err == nil && len(existing) > 0 {
 		s := existing[0]
-		fmt.Printf("A VM is already running for this worktree (slot %d).\n", s.SlotNumber)
+		fmt.Printf("A VM is already running for this worktree (slot %d), connecting to it.\n", s.SlotNumber)
 		fmt.Printf("  ssh:    ssh -p %d root@%s\n", s.PortStart, s.IPAddress)
 		fmt.Printf("  attach: homura vm attach\n")
 		fmt.Printf("  stop:   homura vm stop\n")
-		return nil
+		return execSSH(s.IPAddress, s.PortStart)
 	}
 
 	client, err := daemon.EnsureDaemon()
@@ -205,7 +251,19 @@ func runVMDetached(shareMode vm.ShareMode, copyPath string) error {
 	fmt.Printf("[homura vm] Console log: %s\n", result.ConsoleLog)
 	fmt.Println("[homura vm] Attach to console: homura vm attach")
 	fmt.Println("[homura vm] Stop VM:           homura vm stop")
-	return nil
+
+	// Drop straight into the VM. Exiting the shell leaves the VM running;
+	// stop it with `homura vm stop`.
+	fmt.Println()
+	fmt.Printf("[homura vm] Waiting for SSH (up to %s)...\n", sshReadyTimeout)
+	sshWaitStart := time.Now()
+	if !waitForSSH(result.IP, result.SSHPort, sshReadyTimeout) {
+		fmt.Printf("[homura vm] SSH not ready after %s; the VM keeps booting in the background.\n", sshReadyTimeout)
+		fmt.Println("[homura vm] Connect manually with: homura vm ssh")
+		return nil
+	}
+	fmt.Printf("[homura vm] SSH ready after %s\n", time.Since(sshWaitStart).Round(time.Millisecond))
+	return execSSH(result.IP, result.SSHPort)
 }
 
 // VMLs implements the `homura vm ls` command
@@ -362,21 +420,6 @@ func VMSsh(cmd *cobra.Command, args []string, branchName string) error {
 
 	slog.Info("Connecting to VM", "ip", slot.IPAddress, "ssh_port", slot.PortStart, "working_dir", workDir)
 
-	// Use syscall.Exec to replace the current process with SSH
-	// This gives the user a clean SSH session
-	sshPath, err := exec.LookPath("ssh")
-	if err != nil {
-		return fmt.Errorf("ssh command not found: %w", err)
-	}
-
 	// SSH is mapped to the first port in the slot's range
-	sshArgs := []string{"ssh", "-p", fmt.Sprintf("%d", slot.PortStart), fmt.Sprintf("root@%s", slot.IPAddress)}
-
-	// Replace current process with SSH
-	if err := syscall.Exec(sshPath, sshArgs, os.Environ()); err != nil {
-		return fmt.Errorf("failed to exec ssh: %w", err)
-	}
-
-	// This line is unreachable if exec succeeds
-	return nil
+	return execSSH(slot.IPAddress, slot.PortStart)
 }
