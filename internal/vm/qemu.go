@@ -32,6 +32,11 @@ type QEMUConfig struct {
 	PortStart  int    // First port in range
 	PortEnd    int    // Last port in range
 	SlotNumber int    // VM slot number
+
+	// Serial console (daemon mode). When ConsoleSocket is empty, the serial
+	// console goes to stdio (today's foreground behavior).
+	ConsoleSocket string // unix socket path for the serial chardev
+	ConsoleLog    string // QEMU chardev logfile path
 }
 
 // BuildQEMUArgs builds the argument list for launching QEMU with q35 machine
@@ -58,10 +63,21 @@ func BuildQEMUArgs(cfg *QEMUConfig) []string {
 		"-nodefaults",
 		"-no-user-config",
 		"-nographic",
+	}
 
-		// Serial console to stdio
-		"-serial", "stdio",
+	// Serial console: a unix-socket chardev in daemon mode (QEMU persists
+	// output to logfile itself, whether or not anything is connected), or
+	// stdio for today's foreground behavior.
+	if cfg.ConsoleSocket != "" {
+		args = append(args,
+			"-chardev", fmt.Sprintf("socket,id=ser0,path=%s,server=on,wait=off,logfile=%s,logappend=on",
+				cfg.ConsoleSocket, cfg.ConsoleLog),
+			"-serial", "chardev:ser0")
+	} else {
+		args = append(args, "-serial", "stdio")
+	}
 
+	args = append(args,
 		// Rootfs as virtio-blk device (PCI transport for microvm)
 		"-drive", fmt.Sprintf("id=root,file=%s,format=raw,if=none", cfg.RootfsPath),
 		"-device", "virtio-blk-pci,drive=root",
@@ -69,7 +85,7 @@ func BuildQEMUArgs(cfg *QEMUConfig) []string {
 		// Passt networking via Unix socket (PCI transport for microvm)
 		"-netdev", fmt.Sprintf("stream,id=net0,addr.type=unix,addr.path=%s", cfg.PasstSocket),
 		"-device", "virtio-net-pci,netdev=net0",
-	}
+	)
 
 	// Add virtiofs device if using virtiofs mode
 	if cfg.ShareMode == ShareModeVirtioFS && cfg.VirtiofsSocket != "" {

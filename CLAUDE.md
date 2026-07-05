@@ -37,6 +37,25 @@ homura ls
 # Remove worktree (uses default branch if not specified)
 homura rm [branch-name]
 homura rm -f [branch-name]  # Force removal even with uncommitted changes
+
+# Start a VM for the worktree, detached under the homura daemon (default).
+# Streams build/boot progress, then returns; the VM keeps running.
+homura vm [branch-name]
+homura vm --fg [branch-name]  # Old behavior: QEMU chained to this terminal
+
+# SSH into a running VM
+homura vm ssh [branch-name]
+
+# Attach an interactive serial console to a detached VM (Ctrl-] to detach).
+# The serial console is also always captured to
+# ~/.cache/homura/logs/console-slot<N>-<timestamp>.log, attached or not.
+homura vm attach [branch-name]
+
+# Stop a running VM and clean up (slot, sockets, ephemeral disk; console log survives)
+homura vm stop [branch-name]
+
+# List running VMs (shows slot, SSH port, console log path)
+homura vm ls
 ```
 
 ## VM Customization
@@ -236,7 +255,7 @@ VMs are launched with QEMU using direct kernel boot (no BIOS/firmware):
 - **Devices:**
   - `virtio-blk-pci` for rootfs (ext4 on `/dev/vda`)
   - `virtio-net-pci` connected via passt Unix socket
-  - Serial console to stdio (`-nographic`)
+  - Serial console (`-nographic`): in daemon mode (default), a unix-socket chardev at `<stateDir>/console.sock` with QEMU-native capture to a logfile (`-chardev socket,...,logfile=...`); with `--fg`, plain `-serial stdio`
 
 **Kernel command line parameters:**
 ```
@@ -308,17 +327,40 @@ vm_slots:
   slot_number     -- 1-254, unique IP/port range
   ip_address      -- 127.0.0.X (X = slot number)
   port_start/end  -- allocated port range
-  vm_pid          -- QEMU process ID
+  vm_pid          -- PID of the owning homura process (daemon, or the fg homura for --fg VMs)
   passt_socket_path
   working_dir     -- directory where VM was started
   ninep_pid       -- 9passthrough process ID
   ninep_control_socket/port
   created_at
+  qemu_pid        -- QEMU process ID (filled in after launch)
+  console_socket  -- serial console unix socket ("" for --fg VMs; how attach/stop tell modes apart)
+  console_log     -- persistent console log path in ~/.cache/homura/logs/
 ```
 
-Slot allocation uses `BEGIN IMMEDIATE` transactions to prevent race conditions. Stale slots are auto-cleaned by checking if the QEMU PID is still alive.
+Slot allocation uses `BEGIN IMMEDIATE` transactions to prevent race conditions. Stale slots are auto-cleaned by checking if the owning PID is still alive (and their `homura-vm-*` state dirs removed).
+
+`vm ssh`, `vm ls`, `vm attach`, and the `9p` commands read this DB directly — they never need the daemon.
 
 Relevant files: `internal/vm/globalstate.go`
+
+### VM Daemon
+
+By default `homura vm` runs VMs detached under a single central daemon instead of chaining QEMU to the terminal (`--fg` restores that).
+
+**Lifecycle:**
+- Any `homura vm` auto-spawns `homura daemon run` (hidden command) via re-exec with `Setsid` if no daemon answers. A `flock` on `<runtime>/daemon.lock` makes concurrent spawns converge on one daemon (losers exit 0).
+- Runtime dir: `$XDG_RUNTIME_DIR/homura` (fallback `/tmp/homura-<uid>`), holding `daemon.sock` (0600) and `daemon.lock`.
+- The daemon idle-exits 60 seconds after the last VM stops (respawn is cheap). SIGTERM/SIGINT gracefully stops all VMs first.
+- Daemon log: `~/.cache/homura/logs/daemon.log`.
+
+**RPC protocol** (newline-delimited JSON over the unix socket, one connection per request, same style as the 9passthrough control socket): `ping`, `start-vm` (streams `{"event":"log"}` frames with build/boot progress before the final result — this is how `homura vm` still shows image-build output), `stop-vm`, `list-vms`, `shutdown`.
+
+**Process ownership:** the daemon is the parent of QEMU/passt/virtiofsd/9passthrough, all spawned with `Pdeathsig: SIGTERM` so a daemon crash doesn't leak them; a supervision goroutine per VM reaps QEMU and runs cleanup on exit. `vm_slots.vm_pid` is the daemon's PID, so the existing stale-slot GC handles daemon death.
+
+**Serial console:** QEMU writes the console to `<stateDir>/console.sock` (chardev with `logfile=`), so kernel output is always captured to `~/.cache/homura/logs/console-slot<N>-<timestamp>.log` — attached or not, surviving VM cleanup. `homura vm attach` connects directly to the socket (raw TTY, Ctrl-] detaches); an advisory flock on `attach.lock` prevents a second attach from silently hanging (QEMU socket chardevs serve one client).
+
+Relevant files: `internal/daemon/` (paths, protocol, server, client), `internal/commands/vm_attach.go`, `internal/commands/vm_stop.go`
 
 ### 9p Filesystem (Host Side)
 
@@ -510,7 +552,8 @@ Increment `VMImplementationVersion` in `internal/vm/version.go` when:
 #### When NOT to Bump the Version
 
 Do NOT bump version for:
-- Changes to QEMU launch args that don't affect guest (e.g., host-side memory/CPU settings)
+- Changes to QEMU launch args that don't affect guest (e.g., host-side memory/CPU settings, serial console wiring)
+- Changes to the homura daemon (`internal/daemon/`) or the attach/stop commands
 - Changes to passt networking host-side configuration
 - Changes to VM state management (`globalstate.go`)
 - Changes to slot allocation logic

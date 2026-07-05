@@ -75,8 +75,11 @@ func (pm *PasstManager) Start() error {
 	pm.Cmd = exec.Command("passt", args...)
 
 	// Log passt output to slog
-	pm.Cmd.Stdout = os.Stderr
-	pm.Cmd.Stderr = os.Stderr
+	pm.Cmd.Stdout = ChildOutput
+	pm.Cmd.Stderr = ChildOutput
+	if ChildProcAttr != nil {
+		pm.Cmd.SysProcAttr = ChildProcAttr
+	}
 
 	slog.Info("Starting passt",
 		"socket", pm.SocketPath,

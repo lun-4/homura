@@ -148,10 +148,11 @@ homura vm
 # OR select your branch
 homura vm fix-indices
 
-# get a separate tmux pane
-cd myrepo
+# the VM starts detached under a background daemon: you see the build/boot
+# progress, then get your shell back while the VM keeps running.
+# no dedicated tmux pane needed.
 
-# and now you can enter the vm!
+# now you can enter the vm!
 homura vm ssh
 
 # the host fs gets shared under /mnt/host
@@ -159,7 +160,22 @@ cd /mnt/host/home/luna/path/to/myrepo
 
 # claude is preinstalled
 claude
+
+# want the kernel logs / a serial console? attach to it (Ctrl-] to detach)
+homura vm attach
+
+# the full serial console output is also always captured to
+# ~/.cache/homura/logs/console-slot<N>-<timestamp>.log (path shown by `homura vm ls`),
+# even while nothing is attached, and survives VM shutdown for postmortems
+
+# done? stop the VM (also cleans slot, sockets, ephemeral disk)
+homura vm stop
+
+# prefer the old behavior of QEMU chained to your terminal? use --fg
+homura vm --fg fix-indices
 ```
+
+the first `homura vm` auto-spawns the daemon (`homura daemon run`, hidden command); it idle-exits ~60s after the last VM stops. daemon logs go to `~/.cache/homura/logs/daemon.log`.
 
 ### vm.json
 

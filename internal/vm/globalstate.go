@@ -44,6 +44,13 @@ type VMSlot struct {
 	VirtiofsAdminPort  int
 	VirtiofsVMPort     int
 
+	// QEMU process + serial console (daemon mode). QEMUPID is set after
+	// launch via UpdateSlotQEMUPid. ConsoleSocket/ConsoleLog are "" for
+	// foreground-owned VMs - that's how `vm attach`/`vm stop` distinguish them.
+	QEMUPID       int
+	ConsoleSocket string
+	ConsoleLog    string
+
 	// Metadata
 	CreatedAt int64 // Unix milliseconds
 }
@@ -90,7 +97,10 @@ func initGlobalStateDB() error {
 		virtiofs_pid INTEGER NOT NULL DEFAULT 0,
 		virtiofs_socket TEXT NOT NULL DEFAULT '',
 		virtiofs_admin_port INTEGER NOT NULL DEFAULT 0,
-		virtiofs_vm_port INTEGER NOT NULL DEFAULT 0
+		virtiofs_vm_port INTEGER NOT NULL DEFAULT 0,
+		qemu_pid INTEGER NOT NULL DEFAULT 0,
+		console_socket TEXT NOT NULL DEFAULT '',
+		console_log TEXT NOT NULL DEFAULT ''
 	) STRICT;
 
 	CREATE INDEX IF NOT EXISTS idx_vm_pid ON vm_slots(vm_pid);
@@ -109,6 +119,9 @@ func initGlobalStateDB() error {
 		"ALTER TABLE vm_slots ADD COLUMN virtiofs_socket TEXT NOT NULL DEFAULT ''",
 		"ALTER TABLE vm_slots ADD COLUMN virtiofs_admin_port INTEGER NOT NULL DEFAULT 0",
 		"ALTER TABLE vm_slots ADD COLUMN virtiofs_vm_port INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE vm_slots ADD COLUMN qemu_pid INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE vm_slots ADD COLUMN console_socket TEXT NOT NULL DEFAULT ''",
+		"ALTER TABLE vm_slots ADD COLUMN console_log TEXT NOT NULL DEFAULT ''",
 	}
 	for _, migration := range migrations {
 		// Ignore errors since columns may already exist
@@ -220,6 +233,9 @@ type VMSlotParams struct {
 	VirtiofsSocket     string
 	VirtiofsAdminPort  int
 	VirtiofsVMPort     int
+	// Serial console (daemon mode); "" for foreground-owned VMs
+	ConsoleSocket      string
+	ConsoleLog         string
 }
 
 // PeekNextSlotNumber finds and returns the next available slot number without allocating it.
@@ -325,13 +341,15 @@ func AllocateVMSlot(params VMSlotParams) (*VMSlot, error) {
 			slot_number, ip_address, port_start, port_end, vm_pid,
 			passt_socket_path, working_dir, ninep_pid, ninep_control_socket,
 			ninep_control_port, created_at, share_mode, virtiofs_pid,
-			virtiofs_socket, virtiofs_admin_port, virtiofs_vm_port
+			virtiofs_socket, virtiofs_admin_port, virtiofs_vm_port,
+			console_socket, console_log
 		)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, nextSlot, ipAddress, portStart, portEnd, vmPID,
 		params.SocketPath, params.WorkingDir, params.NinePPID, params.NinePSocket,
 		params.NinePPort, createdAt, shareMode, params.VirtiofsPID,
-		params.VirtiofsSocket, params.VirtiofsAdminPort, params.VirtiofsVMPort)
+		params.VirtiofsSocket, params.VirtiofsAdminPort, params.VirtiofsVMPort,
+		params.ConsoleSocket, params.ConsoleLog)
 	if err != nil {
 		return nil, fmt.Errorf("failed to insert slot: %w", err)
 	}
@@ -357,8 +375,52 @@ func AllocateVMSlot(params VMSlotParams) (*VMSlot, error) {
 		VirtiofsSocket:     params.VirtiofsSocket,
 		VirtiofsAdminPort:  params.VirtiofsAdminPort,
 		VirtiofsVMPort:     params.VirtiofsVMPort,
+		ConsoleSocket:      params.ConsoleSocket,
+		ConsoleLog:         params.ConsoleLog,
 		CreatedAt:          createdAt,
 	}, nil
+}
+
+// UpdateSlotQEMUPid records the QEMU process PID for a slot once it's known.
+// AllocateVMSlot runs before QEMU is launched, so this fills it in afterward.
+func UpdateSlotQEMUPid(slotNumber, qemuPID int) error {
+	if err := initGlobalStateDB(); err != nil {
+		return err
+	}
+
+	db, err := sql.Open("sqlite3", GlobalStateDBPath)
+	if err != nil {
+		return fmt.Errorf("failed to open global state DB: %w", err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec("UPDATE vm_slots SET qemu_pid = ? WHERE slot_number = ?", qemuPID, slotNumber); err != nil {
+		return fmt.Errorf("failed to update qemu pid for slot %d: %w", slotNumber, err)
+	}
+
+	return nil
+}
+
+// UpdateSlotConsole records the serial console socket + logfile paths for a
+// slot. Start() calls this in daemon mode once it knows the paths, so that
+// `vm attach`/`vm stop` can locate the console via the DB.
+func UpdateSlotConsole(slotNumber int, consoleSocket, consoleLog string) error {
+	if err := initGlobalStateDB(); err != nil {
+		return err
+	}
+
+	db, err := sql.Open("sqlite3", GlobalStateDBPath)
+	if err != nil {
+		return fmt.Errorf("failed to open global state DB: %w", err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec("UPDATE vm_slots SET console_socket = ?, console_log = ? WHERE slot_number = ?",
+		consoleSocket, consoleLog, slotNumber); err != nil {
+		return fmt.Errorf("failed to update console paths for slot %d: %w", slotNumber, err)
+	}
+
+	return nil
 }
 
 // ReleaseVMSlot frees a slot when the VM stops
@@ -403,7 +465,7 @@ func FindVMByWorkDir(workDir string) (*VMSlot, error) {
 		SELECT slot_number, ip_address, port_start, port_end, vm_pid,
 		       passt_socket_path, working_dir, ninep_pid, ninep_control_socket,
 		       ninep_control_port, share_mode, virtiofs_pid, virtiofs_socket,
-		       virtiofs_admin_port, virtiofs_vm_port
+		       virtiofs_admin_port, virtiofs_vm_port, qemu_pid, console_socket, console_log
 		FROM vm_slots
 		WHERE working_dir = ?
 	`, workDir).Scan(
@@ -412,6 +474,7 @@ func FindVMByWorkDir(workDir string) (*VMSlot, error) {
 		&slot.NinePPID, &slot.NinePControlSocket, &slot.NinePControlPort,
 		&slot.ShareMode, &slot.VirtiofsPID, &slot.VirtiofsSocket,
 		&slot.VirtiofsAdminPort, &slot.VirtiofsVMPort,
+		&slot.QEMUPID, &slot.ConsoleSocket, &slot.ConsoleLog,
 	)
 
 	if err == sql.ErrNoRows {
@@ -445,7 +508,8 @@ func FindVMsByWorkDir(workDir string) ([]*VMSlot, error) {
 		SELECT slot_number, ip_address, port_start, port_end, vm_pid,
 		       passt_socket_path, working_dir, ninep_pid, ninep_control_socket,
 		       ninep_control_port, created_at, share_mode, virtiofs_pid,
-		       virtiofs_socket, virtiofs_admin_port, virtiofs_vm_port
+		       virtiofs_socket, virtiofs_admin_port, virtiofs_vm_port,
+		       qemu_pid, console_socket, console_log
 		FROM vm_slots
 		WHERE working_dir = ?
 		ORDER BY slot_number
@@ -464,6 +528,7 @@ func FindVMsByWorkDir(workDir string) ([]*VMSlot, error) {
 			&slot.NinePPID, &slot.NinePControlSocket, &slot.NinePControlPort,
 			&slot.CreatedAt, &slot.ShareMode, &slot.VirtiofsPID,
 			&slot.VirtiofsSocket, &slot.VirtiofsAdminPort, &slot.VirtiofsVMPort,
+			&slot.QEMUPID, &slot.ConsoleSocket, &slot.ConsoleLog,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
@@ -499,7 +564,7 @@ func FindVMBySlot(slotNumber int) (*VMSlot, error) {
 		SELECT slot_number, ip_address, port_start, port_end, vm_pid,
 		       passt_socket_path, working_dir, ninep_pid, ninep_control_socket,
 		       ninep_control_port, share_mode, virtiofs_pid, virtiofs_socket,
-		       virtiofs_admin_port, virtiofs_vm_port
+		       virtiofs_admin_port, virtiofs_vm_port, qemu_pid, console_socket, console_log
 		FROM vm_slots
 		WHERE slot_number = ?
 	`, slotNumber).Scan(
@@ -508,6 +573,7 @@ func FindVMBySlot(slotNumber int) (*VMSlot, error) {
 		&slot.NinePPID, &slot.NinePControlSocket, &slot.NinePControlPort,
 		&slot.ShareMode, &slot.VirtiofsPID, &slot.VirtiofsSocket,
 		&slot.VirtiofsAdminPort, &slot.VirtiofsVMPort,
+		&slot.QEMUPID, &slot.ConsoleSocket, &slot.ConsoleLog,
 	)
 
 	if err == sql.ErrNoRows {
@@ -541,7 +607,8 @@ func ListAllVMs() ([]*VMSlot, error) {
 		SELECT slot_number, ip_address, port_start, port_end, vm_pid,
 		       passt_socket_path, working_dir, ninep_pid, ninep_control_socket,
 		       ninep_control_port, created_at, share_mode, virtiofs_pid,
-		       virtiofs_socket, virtiofs_admin_port, virtiofs_vm_port
+		       virtiofs_socket, virtiofs_admin_port, virtiofs_vm_port,
+		       qemu_pid, console_socket, console_log
 		FROM vm_slots
 		ORDER BY slot_number
 	`)
@@ -559,6 +626,7 @@ func ListAllVMs() ([]*VMSlot, error) {
 			&slot.NinePPID, &slot.NinePControlSocket, &slot.NinePControlPort,
 			&slot.CreatedAt, &slot.ShareMode, &slot.VirtiofsPID,
 			&slot.VirtiofsSocket, &slot.VirtiofsAdminPort, &slot.VirtiofsVMPort,
+			&slot.QEMUPID, &slot.ConsoleSocket, &slot.ConsoleLog,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
@@ -594,7 +662,7 @@ func FindVMByNinePPID(ninepPID int) (*VMSlot, error) {
 		SELECT slot_number, ip_address, port_start, port_end, vm_pid,
 		       passt_socket_path, working_dir, ninep_pid, ninep_control_socket,
 		       ninep_control_port, share_mode, virtiofs_pid, virtiofs_socket,
-		       virtiofs_admin_port, virtiofs_vm_port
+		       virtiofs_admin_port, virtiofs_vm_port, qemu_pid, console_socket, console_log
 		FROM vm_slots
 		WHERE ninep_pid = ?
 	`, ninepPID).Scan(
@@ -603,6 +671,7 @@ func FindVMByNinePPID(ninepPID int) (*VMSlot, error) {
 		&slot.NinePPID, &slot.NinePControlSocket, &slot.NinePControlPort,
 		&slot.ShareMode, &slot.VirtiofsPID, &slot.VirtiofsSocket,
 		&slot.VirtiofsAdminPort, &slot.VirtiofsVMPort,
+		&slot.QEMUPID, &slot.ConsoleSocket, &slot.ConsoleLog,
 	)
 
 	if err == sql.ErrNoRows {

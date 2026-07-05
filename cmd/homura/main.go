@@ -10,11 +10,12 @@ import (
 )
 
 var (
-	forceFlag       bool
-	ninepTargetDir  string // Global flag for all 9p commands
-	ninepTargetPID  int    // Target 9passthrough by PID
-	ninepTargetVMID int    // Target VM by slot number
-	shareModeFlag   string // Filesystem sharing mode: "9p" or "virtiofs"
+	forceFlag        bool
+	ninepTargetDir   string // Global flag for all 9p commands
+	ninepTargetPID   int    // Target 9passthrough by PID
+	ninepTargetVMID  int    // Target VM by slot number
+	shareModeFlag    string // Filesystem sharing mode: "9p" or "virtiofs"
+	vmForegroundFlag bool   // Run the VM chained to this terminal (--fg)
 )
 
 var rootCmd = &cobra.Command{
@@ -80,7 +81,48 @@ var vmCmd = &cobra.Command{
 		if len(args) > 0 {
 			branchName = args[0]
 		}
-		return commands.RunVM(cmd, args, branchName, shareModeFlag)
+		return commands.RunVM(cmd, args, branchName, shareModeFlag, vmForegroundFlag)
+	},
+}
+
+var vmAttachCmd = &cobra.Command{
+	Use:   "attach [branch]",
+	Short: "Attach an interactive serial console to a running VM (Ctrl-] to detach)",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		branchName := ""
+		if len(args) > 0 {
+			branchName = args[0]
+		}
+		return commands.VMAttach(branchName)
+	},
+}
+
+var vmStopCmd = &cobra.Command{
+	Use:   "stop [branch]",
+	Short: "Stop a running VM and clean up its resources",
+	Args:  cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		branchName := ""
+		if len(args) > 0 {
+			branchName = args[0]
+		}
+		return commands.VMStop(branchName)
+	},
+}
+
+var daemonCmd = &cobra.Command{
+	Use:    "daemon",
+	Short:  "Manage the homura VM daemon",
+	Hidden: true,
+}
+
+var daemonRunCmd = &cobra.Command{
+	Use:   "run",
+	Short: "Run the homura VM daemon in the foreground",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return commands.DaemonRun()
 	},
 }
 
@@ -167,6 +209,8 @@ func init() {
 	// VM command flags
 	vmCmd.Flags().StringVar(&shareModeFlag, "share-mode", "virtiofs",
 		"Filesystem sharing mode: '9p' (default, uses FUSE) or 'virtiofs' (uses kernel driver)")
+	vmCmd.Flags().BoolVar(&vmForegroundFlag, "fg", false,
+		"Run the VM chained to this terminal instead of detached under the daemon")
 
 	rootCmd.AddCommand(cloneCmd)
 	rootCmd.AddCommand(shCmd)
@@ -174,10 +218,16 @@ func init() {
 	rootCmd.AddCommand(lsCmd)
 	rootCmd.AddCommand(vmCmd)
 	rootCmd.AddCommand(ninepCmd)
+	rootCmd.AddCommand(daemonCmd)
 
 	// Add vm subcommands
 	vmCmd.AddCommand(vmSshCmd)
 	vmCmd.AddCommand(vmLsCmd)
+	vmCmd.AddCommand(vmAttachCmd)
+	vmCmd.AddCommand(vmStopCmd)
+
+	// Add daemon subcommands
+	daemonCmd.AddCommand(daemonRunCmd)
 
 	// Add -d, -p, and -vm flags to all 9p commands
 	ninepCmd.PersistentFlags().StringVarP(&ninepTargetDir, "dir", "d", "",

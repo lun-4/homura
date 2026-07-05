@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/lun-4/homura/internal/config"
+	"github.com/lun-4/homura/internal/daemon"
 	"github.com/lun-4/homura/internal/git"
 	"github.com/lun-4/homura/internal/vm"
 	"github.com/spf13/cobra"
@@ -50,51 +51,23 @@ func formatRelativeTime(createdAtMs int64) string {
 	}
 }
 
-// RunVM implements the `homura vm` command
-func RunVM(cmd *cobra.Command, args []string, branchName string, shareModeStr string) error {
+// RunVM implements the `homura vm` command. By default it starts the VM
+// detached under the central daemon (streaming build/boot progress and then
+// returning); with foreground=true (--fg) it keeps today's behavior of running
+// QEMU chained to this terminal.
+func RunVM(cmd *cobra.Command, args []string, branchName string, shareModeStr string, foreground bool) error {
 	// Parse and validate share mode
 	shareMode, err := vm.ParseShareMode(shareModeStr)
 	if err != nil {
 		return err
 	}
 
-	slog.Info("Starting homura VM", "share_mode", shareMode)
+	slog.Info("Starting homura VM", "share_mode", shareMode, "foreground", foreground)
 
-	// Get current working directory
-	cwd, err := os.Getwd()
+	// Resolve the branch (or default branch) to an existing worktree
+	copyPath, branchName, err := resolveVMWorkDir(branchName, true)
 	if err != nil {
-		return fmt.Errorf("failed to get current directory: %w", err)
-	}
-
-	// Validate we're in a git repo
-	repoRoot, err := git.GetRepoRoot(cwd)
-	if err != nil {
-		return fmt.Errorf("not a git repository: %w", err)
-	}
-
-	// If no branch name provided, use default branch
-	if branchName == "" {
-		state, err := config.LoadState(repoRoot)
-		if err != nil {
-			return fmt.Errorf("failed to load state: %w", err)
-		}
-		if state.DefaultBranch == "" {
-			return fmt.Errorf("no default branch set and no branch name provided")
-		}
-		branchName = state.DefaultBranch
-	}
-
-	// Get copy path
-	copyPath := git.GetCopyPath(repoRoot, branchName)
-
-	// Check if copy exists
-	if _, err := os.Stat(copyPath); os.IsNotExist(err) {
-		return fmt.Errorf("copy does not exist at %s\nRun 'homura clone %s' first", copyPath, branchName)
-	}
-
-	// Change to the copy directory
-	if err := os.Chdir(copyPath); err != nil {
-		return fmt.Errorf("failed to change to copy directory: %w", err)
+		return err
 	}
 
 	slog.Info("Running VM in copy", "branch", branchName, "path", copyPath)
@@ -151,8 +124,21 @@ RUN echo 'set -gx MY_VAR value' >> /root/.config/fish/config.fish
 		}
 	}
 
-	// Create new VM instance
-	vmInstance, err := vm.NewVM(shareMode)
+	if foreground {
+		return runVMForeground(shareMode, copyPath)
+	}
+	return runVMDetached(shareMode, copyPath)
+}
+
+// runVMForeground runs QEMU chained to this terminal (today's behavior).
+func runVMForeground(shareMode vm.ShareMode, copyPath string) error {
+	// NewVM no longer changes the process directory itself; do it here so the
+	// foreground VM behaves exactly as before for any cwd-relative work.
+	if err := os.Chdir(copyPath); err != nil {
+		return fmt.Errorf("failed to change to copy directory: %w", err)
+	}
+
+	vmInstance, err := vm.NewVM(shareMode, copyPath, "")
 	if err != nil {
 		return fmt.Errorf("failed to create VM: %w", err)
 	}
@@ -165,7 +151,7 @@ RUN echo 'set -gx MY_VAR value' >> /root/.config/fish/config.fish
 	}()
 
 	// Start the VM
-	if err := vmInstance.Start(); err != nil {
+	if err := vmInstance.Start(vm.StartOptions{Foreground: true}); err != nil {
 		return fmt.Errorf("failed to start VM: %w", err)
 	}
 
@@ -175,6 +161,50 @@ RUN echo 'set -gx MY_VAR value' >> /root/.config/fish/config.fish
 	}
 
 	slog.Info("VM shutdown complete")
+	return nil
+}
+
+// runVMDetached starts the VM under the central daemon, streaming build/boot
+// progress to stderr, then returns while the VM keeps running.
+func runVMDetached(shareMode vm.ShareMode, copyPath string) error {
+	// Don't start a second VM for a worktree that already has one; point the
+	// user at the running one instead.
+	if existing, err := vm.FindVMsByWorkDir(copyPath); err == nil && len(existing) > 0 {
+		s := existing[0]
+		fmt.Printf("A VM is already running for this worktree (slot %d).\n", s.SlotNumber)
+		fmt.Printf("  ssh:    ssh -p %d root@%s\n", s.PortStart, s.IPAddress)
+		fmt.Printf("  attach: homura vm attach\n")
+		fmt.Printf("  stop:   homura vm stop\n")
+		return nil
+	}
+
+	client, err := daemon.EnsureDaemon()
+	if err != nil {
+		return fmt.Errorf("failed to reach homura daemon: %w", err)
+	}
+
+	params := daemon.StartVMParams{
+		WorkDir:      copyPath,
+		ShareMode:    string(shareMode),
+		StateDirBase: os.Getenv("HOMURA_VM_STATE_DIR"),
+	}
+
+	var result daemon.VMResult
+	err = client.CallStream(daemon.MethodStartVM, params, func(line string) {
+		fmt.Fprintln(os.Stderr, line)
+	}, &result)
+	if err != nil {
+		return fmt.Errorf("failed to start VM: %w", err)
+	}
+
+	fmt.Println()
+	fmt.Println("[homura vm] microvm started (running under homura daemon)")
+	fmt.Printf("[homura vm] SSH: ssh -p %d root@%s\n", result.SSHPort, result.IP)
+	fmt.Printf("[homura vm] Slot: %d (IP: %s, Ports: %d-%d)\n",
+		result.Slot, result.IP, result.PortStart, result.PortEnd)
+	fmt.Printf("[homura vm] Console log: %s\n", result.ConsoleLog)
+	fmt.Println("[homura vm] Attach to console: homura vm attach")
+	fmt.Println("[homura vm] Stop VM:           homura vm stop")
 	return nil
 }
 
@@ -202,104 +232,132 @@ func VMLs() error {
 			s.SlotNumber, s.IPAddress, sshPort, portRange,
 			s.ShareMode, s.VMPID, s.WorkingDir)
 		fmt.Printf("       started %s\n", uptime)
+		if s.ConsoleLog != "" {
+			fmt.Printf("       console %s\n", s.ConsoleLog)
+		}
 	}
 
 	fmt.Printf("\n%d VM(s) running\n", len(slots))
 	return nil
 }
 
-// VMSsh implements the `homura vm ssh` command
-func VMSsh(cmd *cobra.Command, args []string, branchName string) error {
-	var workDir string
-
-	// Get current working directory
+// resolveVMWorkDir resolves a branch name (or, if empty, the default branch,
+// or the current directory) to the working directory a VM command should
+// target. It returns the resolved directory and the branch name it came
+// from (empty if the directory came from cwd rather than a worktree).
+//
+// When requireCopy is true, a missing default branch or missing worktree is
+// an error naming the branch to clone (RunVM's behavior: it always needs a
+// worktree to boot a VM in). When false, that same ambiguity falls back to
+// the current working directory instead of failing (VMSsh's behavior: best
+// effort at finding "the" VM for wherever you are).
+func resolveVMWorkDir(branchName string, requireCopy bool) (workDir string, resolvedBranch string, err error) {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return fmt.Errorf("failed to get current directory: %w", err)
+		return "", "", fmt.Errorf("failed to get current directory: %w", err)
 	}
 
 	if branchName != "" {
-		// Branch name provided - resolve to copy path
-		// Validate we're in a git repo
 		repoRoot, err := git.GetRepoRoot(cwd)
 		if err != nil {
-			return fmt.Errorf("not a git repository: %w", err)
+			return "", "", fmt.Errorf("not a git repository: %w", err)
 		}
-
-		// Get copy path for the specified branch
 		copyPath := git.GetCopyPath(repoRoot, branchName)
-
-		// Check if copy exists
 		if _, err := os.Stat(copyPath); os.IsNotExist(err) {
-			return fmt.Errorf("copy does not exist at %s\nRun 'homura clone %s' first", copyPath, branchName)
+			return "", "", fmt.Errorf("copy does not exist at %s\nRun 'homura clone %s' first", copyPath, branchName)
 		}
-
-		workDir = copyPath
-	} else {
-		// No branch provided - try default branch first, then fall back to cwd
-		repoRoot, err := git.GetRepoRoot(cwd)
-		if err == nil {
-			// We're in a git repo, check for default branch
-			state, err := config.LoadState(repoRoot)
-			if err == nil && state.DefaultBranch != "" {
-				// Default branch is set, use it
-				copyPath := git.GetCopyPath(repoRoot, state.DefaultBranch)
-				if _, err := os.Stat(copyPath); err == nil {
-					// Copy exists, use it
-					workDir = copyPath
-					slog.Debug("Using default branch", "branch", state.DefaultBranch)
-				} else {
-					// Copy doesn't exist, fall back to cwd
-					workDir = cwd
-					slog.Debug("Default branch copy doesn't exist, using cwd")
-				}
-			} else {
-				// No default branch, use cwd
-				workDir = cwd
-				slog.Debug("No default branch set, using cwd")
-			}
-		} else {
-			// Not in a git repo, just use cwd
-			workDir = cwd
-			slog.Debug("Not in a git repo, using cwd")
-		}
+		return copyPath, branchName, nil
 	}
 
-	// Find all running VMs for this working directory
+	if requireCopy {
+		repoRoot, err := git.GetRepoRoot(cwd)
+		if err != nil {
+			return "", "", fmt.Errorf("not a git repository: %w", err)
+		}
+		state, err := config.LoadState(repoRoot)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to load state: %w", err)
+		}
+		if state.DefaultBranch == "" {
+			return "", "", fmt.Errorf("no default branch set and no branch name provided")
+		}
+		copyPath := git.GetCopyPath(repoRoot, state.DefaultBranch)
+		if _, err := os.Stat(copyPath); os.IsNotExist(err) {
+			return "", "", fmt.Errorf("copy does not exist at %s\nRun 'homura clone %s' first", copyPath, state.DefaultBranch)
+		}
+		return copyPath, state.DefaultBranch, nil
+	}
+
+	// No branch given, and a missing/ambiguous worktree isn't fatal here -
+	// fall back to cwd.
+	repoRoot, err := git.GetRepoRoot(cwd)
+	if err != nil {
+		slog.Debug("Not in a git repo, using cwd")
+		return cwd, "", nil
+	}
+	state, err := config.LoadState(repoRoot)
+	if err != nil || state.DefaultBranch == "" {
+		slog.Debug("No default branch set, using cwd")
+		return cwd, "", nil
+	}
+	copyPath := git.GetCopyPath(repoRoot, state.DefaultBranch)
+	if _, err := os.Stat(copyPath); err != nil {
+		slog.Debug("Default branch copy doesn't exist, using cwd")
+		return cwd, "", nil
+	}
+	slog.Debug("Using default branch", "branch", state.DefaultBranch)
+	return copyPath, state.DefaultBranch, nil
+}
+
+// selectVMSlot finds the running VM(s) for workDir. If there's exactly one,
+// it's returned directly; if there are several, the user is prompted to pick
+// one interactively.
+func selectVMSlot(workDir string) (*vm.VMSlot, error) {
 	slots, err := vm.FindVMsByWorkDir(workDir)
 	if err != nil {
-		return fmt.Errorf("failed to find VMs: %w", err)
+		return nil, fmt.Errorf("failed to find VMs: %w", err)
 	}
 
 	if len(slots) == 0 {
-		return fmt.Errorf("no VM found for working directory: %s", workDir)
+		return nil, fmt.Errorf("no VM found for working directory: %s", workDir)
 	}
 
-	var slot *vm.VMSlot
 	if len(slots) == 1 {
-		// Only one VM, use it directly
-		slot = slots[0]
-	} else {
-		// Multiple VMs - show selection list
-		fmt.Printf("Multiple VMs found for %s:\n\n", workDir)
-		for i, s := range slots {
-			fmt.Printf("  %d) slot %d - %s:%d (created %s)\n", i+1, s.SlotNumber, s.IPAddress, s.PortStart, formatRelativeTime(s.CreatedAt))
-		}
-		fmt.Printf("\nSelect VM [1-%d]: ", len(slots))
+		return slots[0], nil
+	}
 
-		reader := bufio.NewReader(os.Stdin)
-		input, err := reader.ReadString('\n')
-		if err != nil {
-			return fmt.Errorf("failed to read input: %w", err)
-		}
+	// Multiple VMs - show selection list
+	fmt.Printf("Multiple VMs found for %s:\n\n", workDir)
+	for i, s := range slots {
+		fmt.Printf("  %d) slot %d - %s:%d (created %s)\n", i+1, s.SlotNumber, s.IPAddress, s.PortStart, formatRelativeTime(s.CreatedAt))
+	}
+	fmt.Printf("\nSelect VM [1-%d]: ", len(slots))
 
-		input = strings.TrimSpace(input)
-		choice, err := strconv.Atoi(input)
-		if err != nil || choice < 1 || choice > len(slots) {
-			return fmt.Errorf("invalid selection: %s", input)
-		}
+	reader := bufio.NewReader(os.Stdin)
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, fmt.Errorf("failed to read input: %w", err)
+	}
 
-		slot = slots[choice-1]
+	input = strings.TrimSpace(input)
+	choice, err := strconv.Atoi(input)
+	if err != nil || choice < 1 || choice > len(slots) {
+		return nil, fmt.Errorf("invalid selection: %s", input)
+	}
+
+	return slots[choice-1], nil
+}
+
+// VMSsh implements the `homura vm ssh` command
+func VMSsh(cmd *cobra.Command, args []string, branchName string) error {
+	workDir, _, err := resolveVMWorkDir(branchName, false)
+	if err != nil {
+		return err
+	}
+
+	slot, err := selectVMSlot(workDir)
+	if err != nil {
+		return err
 	}
 
 	slog.Info("Connecting to VM", "ip", slot.IPAddress, "ssh_port", slot.PortStart, "working_dir", workDir)

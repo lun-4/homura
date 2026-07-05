@@ -567,8 +567,8 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 			"--build-arg", fmt.Sprintf("SSH_PUB_KEY=%s", strings.TrimSpace(string(sshPubKey))),
 			"-t", baseImageName,
 			tmpDir)
-		cmd.Stdout = os.Stderr
-		cmd.Stderr = os.Stderr
+		cmd.Stdout = ChildOutput
+		cmd.Stderr = ChildOutput
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("%s build failed: %w", dockerCmd, err)
 		}
@@ -631,8 +631,8 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 				"-f", customDockerfile,
 				tmpCustomDir,
 			)
-			buildCmd.Stdout = os.Stderr
-			buildCmd.Stderr = os.Stderr
+			buildCmd.Stdout = ChildOutput
+			buildCmd.Stderr = ChildOutput
 
 			if err := buildCmd.Run(); err != nil {
 				return fmt.Errorf("build custom image: %w", err)
@@ -1148,8 +1148,8 @@ mke2fs -q -t ext4 -O "^metadata_csum,^64bit" -E root_owner=0:0 -L rootfs -d "%s"
 	}
 
 	cmd = exec.Command("fakeroot", "sh", scriptPath)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = ChildOutput
+	cmd.Stderr = ChildOutput
 	if err := cmd.Run(); err != nil {
 		os.Remove(tmpRootfs)
 		return fmt.Errorf("fakeroot rootfs build failed: %w", err)
@@ -1171,24 +1171,24 @@ func CreateEphemeralDisk(basePath, destPath string, size string) error {
 
 	// Sparse copy
 	cmd := exec.Command("cp", "--sparse=always", basePath, destPath)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = ChildOutput
+	cmd.Stderr = ChildOutput
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("sparse copy failed: %w", err)
 	}
 
 	// Resize
 	cmd = exec.Command("truncate", "-s", size, destPath)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = ChildOutput
+	cmd.Stderr = ChildOutput
 	if err := cmd.Run(); err != nil {
 		os.Remove(destPath)
 		return fmt.Errorf("truncate failed: %w", err)
 	}
 
 	cmd = exec.Command("resize2fs", destPath)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = ChildOutput
+	cmd.Stderr = ChildOutput
 	if err := cmd.Run(); err != nil {
 		os.Remove(destPath)
 		return fmt.Errorf("resize2fs failed: %w", err)

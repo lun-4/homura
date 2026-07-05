@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -70,12 +71,16 @@ type VM struct {
 	VirtiofsManager *VirtiofsManager
 }
 
-// NewVM creates a new VM instance with detected configuration
-func NewVM(shareMode ShareMode) (*VM, error) {
+// NewVM creates a new VM instance with detected configuration.
+// workDir is the directory exposed to the guest (9p/virtiofs share root).
+// stateDirBase, when non-empty, overrides the HOMURA_VM_STATE_DIR env var /
+// vm.json stateDir resolution for where per-VM state (sockets, ephemeral
+// disk) lives; "" keeps that existing resolution.
+func NewVM(shareMode ShareMode, workDir string, stateDirBase string) (*VM, error) {
 	if shareMode == "" {
 		shareMode = ShareModeVirtioFS
 	}
-	slog.Info("Initializing new VM instance", "share_mode", shareMode)
+	slog.Info("Initializing new VM instance", "share_mode", shareMode, "workdir", workDir)
 
 	// Check if passt is available
 	if !IsPasstAvailable() {
@@ -85,12 +90,6 @@ func NewVM(shareMode ShareMode) (*VM, error) {
 			"  • Arch Linux: pacman -S passt\n" +
 			"  • Fedora: dnf install passt\n\n" +
 			"For more info: https://passt.top/")
-	}
-
-	// Detect current working directory
-	workDir, err := os.Getwd()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get working directory: %w", err)
 	}
 
 	// Get home directory
@@ -114,7 +113,10 @@ func NewVM(shareMode ShareMode) (*VM, error) {
 	// Create per-VM state directory. Defaults to the system temp dir, but can
 	// be pointed at persistent storage (the ephemeral disk lives here, and on
 	// tmpfs /tmp every block the guest writes becomes resident RAM).
-	baseStateDir := os.Getenv("HOMURA_VM_STATE_DIR")
+	baseStateDir := stateDirBase
+	if baseStateDir == "" {
+		baseStateDir = os.Getenv("HOMURA_VM_STATE_DIR")
+	}
 	if baseStateDir == "" {
 		baseStateDir = vmConfig.GetStateDir()
 	}
@@ -170,6 +172,12 @@ func NewVM(shareMode ShareMode) (*VM, error) {
 	slotParams.SocketPath = socketPath
 	slotParams.WorkingDir = workDir
 	slotParams.ShareMode = string(shareMode)
+	// ConsoleSocket/ConsoleLog stay "" here - NewVM doesn't know yet whether
+	// Start will run foreground or daemon-mode (that's decided by the
+	// StartOptions passed to Start, which happens after allocation). In daemon
+	// mode Start() calls UpdateSlotConsole() to populate them once the paths
+	// are known. Empty is the correct value for the foreground caller, and is
+	// how vm attach/vm stop distinguish fg-owned rows.
 
 	// Variables for the VM instance
 	var ninepCmd *exec.Cmd
@@ -263,6 +271,9 @@ func NewVM(shareMode ShareMode) (*VM, error) {
 		}
 
 		ninepCmd = exec.Command(ninepBinary, ninepArgs...)
+		if ChildProcAttr != nil {
+			ninepCmd.SysProcAttr = ChildProcAttr
+		}
 		if err := ninepCmd.Start(); err != nil {
 			os.RemoveAll(stateDir)
 			return nil, fmt.Errorf("failed to start 9passthrough: %w", err)
@@ -371,9 +382,16 @@ func NewVM(shareMode ShareMode) (*VM, error) {
 	return vm, nil
 }
 
+// StartOptions controls how Start wires up the QEMU process.
+type StartOptions struct {
+	Foreground    bool   // -serial stdio + os.Stdin/Stdout/Stderr wiring (today's behavior)
+	ConsoleSocket string // unix socket path for the serial chardev (daemon mode)
+	ConsoleLog    string // QEMU chardev logfile path (daemon mode)
+}
+
 // Start starts the VM
-func (vm *VM) Start() error {
-	slog.Info("Starting VM")
+func (vm *VM) Start(opts StartOptions) error {
+	slog.Info("Starting VM", "foreground", opts.Foreground)
 
 	// Run pre-start snapshot if configured
 	vmConfig, err := LoadVMConfig()
@@ -423,6 +441,11 @@ func (vm *VM) Start() error {
 		SlotNumber:  vm.SlotNumber,
 	}
 
+	if !opts.Foreground {
+		cfg.ConsoleSocket = opts.ConsoleSocket
+		cfg.ConsoleLog = opts.ConsoleLog
+	}
+
 	// Set share-mode-specific config
 	switch vm.ShareMode {
 	case ShareModeVirtioFS:
@@ -443,9 +466,17 @@ func (vm *VM) Start() error {
 
 	// Create QEMU command
 	vm.QEMUCmd = exec.Command("qemu-system-x86_64", args...)
-	vm.QEMUCmd.Stdin = os.Stdin
-	vm.QEMUCmd.Stdout = os.Stdout
-	vm.QEMUCmd.Stderr = os.Stderr
+	if opts.Foreground {
+		vm.QEMUCmd.Stdin = os.Stdin
+		vm.QEMUCmd.Stdout = os.Stdout
+		vm.QEMUCmd.Stderr = os.Stderr
+	} else {
+		vm.QEMUCmd.Stdin = nil
+		vm.QEMUCmd.Stdout = ChildOutput
+		vm.QEMUCmd.Stderr = ChildOutput
+		// Daemon-spawned QEMU dies with the daemon rather than being orphaned.
+		vm.QEMUCmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM}
+	}
 
 	// Start QEMU
 	slog.Info("Launching QEMU")
@@ -455,8 +486,27 @@ func (vm *VM) Start() error {
 
 	slog.Info("QEMU process started", "pid", vm.QEMUCmd.Process.Pid)
 
-	// Display connection info
-	vm.DisplayConnectionInfo()
+	// Record the QEMU PID now that it's known (AllocateVMSlot ran before QEMU
+	// was launched, so it couldn't have this value); harmless in fg mode.
+	if vm.SlotNumber > 0 {
+		if err := UpdateSlotQEMUPid(vm.SlotNumber, vm.QEMUCmd.Process.Pid); err != nil {
+			slog.Warn("Failed to record QEMU pid", "slot", vm.SlotNumber, "error", err)
+		}
+		// In daemon mode, record the console paths so vm attach/vm stop can
+		// find them via the DB. Skipped in fg mode (paths are empty there).
+		if !opts.Foreground {
+			if err := UpdateSlotConsole(vm.SlotNumber, opts.ConsoleSocket, opts.ConsoleLog); err != nil {
+				slog.Warn("Failed to record console paths", "slot", vm.SlotNumber, "error", err)
+			}
+		}
+	}
+
+	// Display connection info to the user in foreground mode. In daemon mode
+	// the RPC result carries these facts back to the client instead, and the
+	// daemon must not print user-facing text to its own stdout.
+	if opts.Foreground {
+		vm.DisplayConnectionInfo()
+	}
 
 	return nil
 }
@@ -492,6 +542,39 @@ func (vm *VM) Wait() error {
 		slog.Info("VM exited normally")
 		return nil
 	}
+}
+
+// Shutdown signals the QEMU process to stop: SIGTERM, then SIGKILL if it
+// hasn't exited within timeout. It only signals - it does not call Wait() -
+// because in daemon mode a supervision goroutine owns Wait() and reaping
+// here would race it. The caller is responsible for reaping the process.
+func (vm *VM) Shutdown(timeout time.Duration) error {
+	if vm.QEMUCmd == nil || vm.QEMUCmd.Process == nil {
+		return fmt.Errorf("VM not running")
+	}
+	proc := vm.QEMUCmd.Process
+
+	if err := proc.Signal(syscall.SIGTERM); err != nil {
+		if errors.Is(err, os.ErrProcessDone) {
+			return nil
+		}
+		return fmt.Errorf("failed to send SIGTERM: %w", err)
+	}
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if err := proc.Signal(syscall.Signal(0)); err != nil {
+			// Signal 0 failing means the process is gone.
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	slog.Warn("VM did not exit after SIGTERM, sending SIGKILL", "pid", proc.Pid)
+	if err := proc.Signal(syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return fmt.Errorf("failed to send SIGKILL: %w", err)
+	}
+	return nil
 }
 
 // Cleanup removes temporary state files
@@ -554,15 +637,41 @@ func (vm *VM) Cleanup() error {
 	return nil
 }
 
+// ConnectionInfo holds the facts a user (or a daemon RPC client) needs to
+// connect to a running VM.
+type ConnectionInfo struct {
+	IPAddress  string
+	SSHPort    int
+	PortStart  int
+	PortEnd    int
+	SlotNumber int
+	ShareMode  ShareMode
+	WorkDir    string
+}
+
+// ConnectionInfo returns the current connection facts for this VM.
+func (vm *VM) ConnectionInfo() ConnectionInfo {
+	return ConnectionInfo{
+		IPAddress:  vm.IPAddress,
+		SSHPort:    vm.PortStart,
+		PortStart:  vm.PortStart,
+		PortEnd:    vm.PortEnd,
+		SlotNumber: vm.SlotNumber,
+		ShareMode:  vm.ShareMode,
+		WorkDir:    vm.WorkDir,
+	}
+}
+
 // DisplayConnectionInfo prints connection information to the user
 func (vm *VM) DisplayConnectionInfo() {
+	info := vm.ConnectionInfo()
 	fmt.Println()
 	fmt.Println("[homura vm] Starting microvm...")
-	fmt.Printf("[homura vm] SSH: ssh -p %d root@%s\n", vm.PortStart, vm.IPAddress)
+	fmt.Printf("[homura vm] SSH: ssh -p %d root@%s\n", info.SSHPort, info.IPAddress)
 	fmt.Printf("[homura vm] Slot: %d (IP: %s, Ports: %d-%d)\n",
-		vm.SlotNumber, vm.IPAddress, vm.PortStart, vm.PortEnd)
+		info.SlotNumber, info.IPAddress, info.PortStart, info.PortEnd)
 	fmt.Println("[homura vm] Network: passt")
-	fmt.Printf("[homura vm] Filesystem: /mnt/host (%s, exposed: %s)\n", vm.ShareMode, vm.WorkDir)
+	fmt.Printf("[homura vm] Filesystem: /mnt/host (%s, exposed: %s)\n", info.ShareMode, info.WorkDir)
 	fmt.Println("[homura vm] Request paths from VM: 9pvm-request /path/to/expose")
 	fmt.Println("[homura vm] Control from host: homura 9p <command>")
 	fmt.Println("[homura vm] Press Ctrl+C to stop")

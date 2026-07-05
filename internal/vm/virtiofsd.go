@@ -145,8 +145,11 @@ func (v *VirtiofsManager) Start() error {
 	}
 
 	v.Cmd = exec.Command(v.BinaryPath, args...)
-	v.Cmd.Stdout = os.Stderr
-	v.Cmd.Stderr = os.Stderr
+	v.Cmd.Stdout = ChildOutput
+	v.Cmd.Stderr = ChildOutput
+	if ChildProcAttr != nil {
+		v.Cmd.SysProcAttr = ChildProcAttr
+	}
 
 	if err := v.Cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start virtiofsd: %w", err)
