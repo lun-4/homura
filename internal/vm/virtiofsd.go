@@ -109,6 +109,14 @@ func (v *VirtiofsManager) Start() error {
 		fmt.Sprintf("--vm-name=%s:%d", v.WorkDir, v.SlotNumber),
 	}
 
+	// Map guest root <-> our own uid/gid so shared files appear root-owned
+	// in the VM (the guest only has root) and guest-created files land
+	// owned by us on the host.
+	args = append(args,
+		fmt.Sprintf("--translate-uid=map:0:%d:1", os.Getuid()),
+		fmt.Sprintf("--translate-gid=map:0:%d:1", os.Getgid()),
+	)
+
 	// Add working directory (always read-write)
 	args = append(args, fmt.Sprintf("--share=%s:rw", v.WorkDir))
 
