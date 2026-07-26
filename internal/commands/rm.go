@@ -64,12 +64,12 @@ func Rm(branchName string, force bool) error {
 	}
 
 	// Remove the worktree using git worktree remove
-	fmt.Printf("Removing worktree .homura/%s/...\n", branchName)
+	fmt.Printf("Removing worktree .homura/%s/...\n", git.BranchDirName(branchName))
 	if err := git.WorktreeRemove(repoRoot, worktreePath, force); err != nil {
 		return fmt.Errorf("failed to remove worktree: %w", err)
 	}
 
-	fmt.Printf("Successfully removed worktree .homura/%s/\n", branchName)
+	fmt.Printf("Successfully removed worktree .homura/%s/\n", git.BranchDirName(branchName))
 
 	return nil
 }

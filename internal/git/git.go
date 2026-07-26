@@ -113,9 +113,16 @@ func GetHomuraDir(repoRoot string) string {
 	return filepath.Join(repoRoot, ".homura")
 }
 
+// BranchDirName returns the directory name used for a branch's worktree.
+// Slashes are mapped to dots so branches like "feat/foo" don't create
+// nested directories under .homura/.
+func BranchDirName(branchName string) string {
+	return strings.ReplaceAll(branchName, "/", ".")
+}
+
 // GetCopyPath returns the path for a specific branch copy
 func GetCopyPath(repoRoot, branchName string) string {
-	return filepath.Join(GetHomuraDir(repoRoot), branchName)
+	return filepath.Join(GetHomuraDir(repoRoot), BranchDirName(branchName))
 }
 
 // WorktreeAdd creates a new git worktree at the specified path with a new branch.
@@ -164,8 +171,14 @@ func WorktreeRemove(repoPath, worktreePath string, force bool) error {
 	return nil
 }
 
+// Worktree describes a single entry from `git worktree list`.
+type Worktree struct {
+	Path   string
+	Branch string // empty for detached HEAD
+}
+
 // WorktreeList returns a list of all worktrees
-func WorktreeList(repoPath string) ([]string, error) {
+func WorktreeList(repoPath string) ([]Worktree, error) {
 	cmd := exec.Command("git", "worktree", "list", "--porcelain")
 	cmd.Dir = repoPath
 	slog.Info("running git command", "cmd", "git", "args", cmd.Args[1:], "dir", repoPath)
@@ -174,11 +187,14 @@ func WorktreeList(repoPath string) ([]string, error) {
 		return nil, fmt.Errorf("failed to list worktrees: %w", err)
 	}
 
-	var worktrees []string
+	var worktrees []Worktree
 	lines := strings.Split(string(output), "\n")
 	for _, line := range lines {
 		if strings.HasPrefix(line, "worktree ") {
-			worktrees = append(worktrees, strings.TrimPrefix(line, "worktree "))
+			worktrees = append(worktrees, Worktree{Path: strings.TrimPrefix(line, "worktree ")})
+		} else if strings.HasPrefix(line, "branch ") && len(worktrees) > 0 {
+			ref := strings.TrimPrefix(line, "branch ")
+			worktrees[len(worktrees)-1].Branch = strings.TrimPrefix(ref, "refs/heads/")
 		}
 	}
 	return worktrees, nil

@@ -3,6 +3,8 @@ package commands
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/lun-4/homura/internal/config"
 	"github.com/lun-4/homura/internal/git"
@@ -37,17 +39,17 @@ func Ls() error {
 		return fmt.Errorf("failed to load state: %w", err)
 	}
 
-	// Read .homura directory
-	entries, err := os.ReadDir(homuraDir)
+	// List worktrees and keep only those under .homura/
+	worktrees, err := git.WorktreeList(repoRoot)
 	if err != nil {
-		return fmt.Errorf("failed to read .homura directory: %w", err)
+		return fmt.Errorf("failed to list worktrees: %w", err)
 	}
 
-	// Filter out non-directory entries and state.toml
-	var copies []string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			copies = append(copies, entry.Name())
+	homuraPrefix := homuraDir + string(os.PathSeparator)
+	var copies []git.Worktree
+	for _, wt := range worktrees {
+		if strings.HasPrefix(wt.Path, homuraPrefix) {
+			copies = append(copies, wt)
 		}
 	}
 
@@ -59,10 +61,14 @@ func Ls() error {
 	// Print copies
 	fmt.Println("Branch copies:")
 	for _, copy := range copies {
-		if copy == state.DefaultBranch {
-			fmt.Printf("  %s (default)\n", copy)
+		name := copy.Branch
+		if name == "" {
+			name = filepath.Base(copy.Path) + " (detached)"
+		}
+		if copy.Branch == state.DefaultBranch {
+			fmt.Printf("  %s (default)\n", name)
 		} else {
-			fmt.Printf("  %s\n", copy)
+			fmt.Printf("  %s\n", name)
 		}
 	}
 

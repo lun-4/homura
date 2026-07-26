@@ -28,9 +28,10 @@ func Clone(branchName, base string) error {
 	// Get destination path
 	destPath := git.GetCopyPath(repoRoot, branchName)
 
-	// Check if worktree already exists
+	// Check if worktree already exists. Note that slashes in branch names are
+	// mapped to dots, so "feat/foo" and "feat.foo" collide on the same path.
 	if _, err := os.Stat(destPath); err == nil {
-		return fmt.Errorf("worktree already exists at %s", destPath)
+		return fmt.Errorf("worktree for branch %q already exists at %s", branchName, destPath)
 	}
 
 	// Create .homura directory if it doesn't exist
@@ -80,7 +81,7 @@ func Clone(branchName, base string) error {
 		return fmt.Errorf("failed to save state: %w", err)
 	}
 
-	fmt.Printf("Successfully created worktree at .homura/%s/\n", branchName)
+	fmt.Printf("Successfully created worktree at .homura/%s/\n", git.BranchDirName(branchName))
 	fmt.Printf("Default branch set to '%s'\n", branchName)
 
 	return nil

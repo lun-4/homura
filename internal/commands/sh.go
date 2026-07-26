@@ -50,7 +50,7 @@ func Sh(branchName string) error {
 		shell = "/bin/sh"
 	}
 
-	fmt.Printf("Opening shell in .homura/%s/\n", branchName)
+	fmt.Printf("Opening shell in .homura/%s/\n", git.BranchDirName(branchName))
 	fmt.Printf("Type 'exit' to return to original repository\n")
 
 	// Change to copy directory and spawn shell
