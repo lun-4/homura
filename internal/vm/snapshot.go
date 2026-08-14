@@ -13,11 +13,11 @@ import (
 
 // SnapshotDir returns the path to the snapshots directory
 func SnapshotDir() (string, error) {
-	homeDir, err := os.UserHomeDir()
+	root, err := CacheDir()
 	if err != nil {
-		return "", fmt.Errorf("failed to get home directory: %w", err)
+		return "", fmt.Errorf("failed to get cache directory: %w", err)
 	}
-	return filepath.Join(homeDir, ".cache", "homura", "snapshots"), nil
+	return filepath.Join(root, "snapshots"), nil
 }
 
 // hasTodaySnapshot checks if a snapshot already exists for today

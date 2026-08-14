@@ -30,7 +30,11 @@ type VirtiofsManager struct {
 // NewVirtiofsManager creates a new VirtiofsManager instance
 func NewVirtiofsManager(stateDir, homeDir, workDir string, slotNumber int, extraPaths []PathSpec) (*VirtiofsManager, error) {
 	// Get virtiofsd binary from cache directory
-	binaryPath := filepath.Join(homeDir, ".cache", "homura", "bin", "virtiofsd")
+	root, err := CacheDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cache directory: %w", err)
+	}
+	binaryPath := filepath.Join(root, "bin", "virtiofsd")
 	if _, err := os.Stat(binaryPath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("virtiofsd binary not found at %s (run 'make virtiofs' to build)", binaryPath)
 	}

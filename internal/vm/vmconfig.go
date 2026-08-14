@@ -35,6 +35,7 @@ type VMConfig struct {
 	Snapshot      []string `json:"snapshot"`      // Paths to snapshot before each VM start
 	MaxSnapshots  *int     `json:"maxSnapshots"`  // Max snapshots to keep (default 7)
 	StateDir      string   `json:"stateDir"`      // Base dir for per-VM state (ephemeral disk, sockets). Empty = system temp dir
+	CacheDir      string   `json:"cacheDir"`      // Override for ~/.cache/homura root. Empty = default
 }
 
 // DefaultMaxSnapshots is the default number of snapshots to keep
@@ -63,6 +64,15 @@ func (c *VMConfig) GetStateDir() string {
 		return ""
 	}
 	return c.StateDir
+}
+
+// GetCacheDir returns the configured cache root override, or "" to use the
+// default ~/.cache/homura
+func (c *VMConfig) GetCacheDir() string {
+	if c == nil {
+		return ""
+	}
+	return c.CacheDir
 }
 
 // PathSpec represents a parsed path specification

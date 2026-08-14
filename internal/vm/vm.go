@@ -105,6 +105,12 @@ func NewVM(shareMode ShareMode, workDir string, stateDirBase string) (*VM, error
 		return nil, fmt.Errorf("failed to load VM config: %w", err)
 	}
 
+	// Get cache root (honors optional cacheDir override in vm.json)
+	cacheRoot, err := CacheDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cache directory: %w", err)
+	}
+
 	// Get extra paths from config
 	var extraPaths []PathSpec
 	if vmConfig != nil {
@@ -221,7 +227,7 @@ func NewVM(shareMode ShareMode, workDir string, stateDirBase string) (*VM, error
 		// Start 9passthrough server
 		slog.Info("Starting 9passthrough server", "workdir", workDir)
 
-		ninepBinary := filepath.Join(homeDir, ".cache", "homura", "bin", "9passthrough")
+		ninepBinary := filepath.Join(cacheRoot, "bin", "9passthrough")
 		if _, err := os.Stat(ninepBinary); os.IsNotExist(err) {
 			os.RemoveAll(stateDir)
 			return nil, fmt.Errorf("9passthrough binary not found at %s (run 'make 9p' to build)", ninepBinary)

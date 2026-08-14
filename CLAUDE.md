@@ -131,6 +131,31 @@ Per-VM state (the 10G ephemeral rootfs disk, passt/virtiofs sockets, generated S
 
 The `HOMURA_VM_STATE_DIR` environment variable overrides the config. Stale state directories from crashed VMs are removed automatically by the slot cleanup that runs on every VM start / `homura vm ls`.
 
+## VM Cache Directory
+
+By default homura keeps its cache tree (VM images, `ssh_host_keys/`, `bin/`, `src/`, `snapshots/`, `logs/`) under `~/.cache/homura`. You can relocate the entire tree with the `cacheDir` key, accepting an absolute path or a `~/...` path:
+
+```json
+{
+  "configVersion": 1,
+  "cacheDir": "/var/cache/homura",
+  "stateDir": "/home.orig/luna/homura-vms"
+}
+```
+
+Or a home-relative path:
+
+```json
+{
+  "configVersion": 1,
+  "cacheDir": "~/homura-cache"
+}
+```
+
+`cacheDir` is resolved with `filepath.Abs` and, when relative, against the current working directory; a leading `~/` is expanded to the user's home. When the key is absent, the default `~/.cache/homura` is used, so existing setups are unaffected.
+
+**Makefile caveat:** `make 9p` / `make virtiofs` / `make clean` are hardcoded to `~/.cache/homura`. The `bin/9passthrough`, `bin/virtiofsd`, and `src/*` artifacts they produce still land in `~/.cache/homura`. If you set a custom `cacheDir`, you must build those targets pointed at the override (or copy the artifacts there) — otherwise the VM will fail to find `bin/9passthrough` / `bin/virtiofsd` / the `src/*` guest binaries.
+
 ## Docker Support
 
 Docker is supported inside homura VMs. The VM includes all necessary kernel modules and dependencies.

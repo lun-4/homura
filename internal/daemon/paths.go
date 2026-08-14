@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/lun-4/homura/internal/vm"
 )
 
 // RuntimeDir returns the per-user runtime directory homura uses for the
@@ -53,11 +55,11 @@ func LockPath() (string, error) {
 // per-VM state dir (removed on cleanup and by stale-slot GC), logs live here
 // so they survive for postmortem. Created 0755.
 func LogDir() (string, error) {
-	home, err := os.UserHomeDir()
+	root, err := vm.CacheDir()
 	if err != nil {
-		return "", fmt.Errorf("failed to get home directory: %w", err)
+		return "", fmt.Errorf("failed to get cache directory: %w", err)
 	}
-	dir := filepath.Join(home, ".cache", "homura", "logs")
+	dir := filepath.Join(root, "logs")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("failed to create log dir %s: %w", dir, err)
 	}

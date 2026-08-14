@@ -97,11 +97,11 @@ func EnsureImages(sshPubKeyPath string) (*ImagePaths, error) {
 
 // getCacheDir returns the cache directory for VM images
 func getCacheDir() (string, error) {
-	home, err := os.UserHomeDir()
+	root, err := CacheDir()
 	if err != nil {
 		return "", err
 	}
-	cacheDir := filepath.Join(home, ".cache", "homura", fmt.Sprintf("v%d", VMImplementationVersion), "vm-images", rootfsDistro)
+	cacheDir := filepath.Join(root, fmt.Sprintf("v%d", VMImplementationVersion), "vm-images", rootfsDistro)
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		return "", err
 	}
@@ -110,11 +110,11 @@ func getCacheDir() (string, error) {
 
 // getSSHKeysDir returns the stable SSH host keys directory (not versioned)
 func getSSHKeysDir() (string, error) {
-	home, err := os.UserHomeDir()
+	root, err := CacheDir()
 	if err != nil {
 		return "", err
 	}
-	sshKeysDir := filepath.Join(home, ".cache", "homura", "ssh_host_keys")
+	sshKeysDir := filepath.Join(root, "ssh_host_keys")
 	if err := os.MkdirAll(sshKeysDir, 0755); err != nil {
 		return "", err
 	}
@@ -528,11 +528,11 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 	}
 
 	// Copy 9pvm-request source for Docker build from cache directory
-	homeDir, err := os.UserHomeDir()
+	root, err := CacheDir()
 	if err != nil {
-		return fmt.Errorf("failed to get home directory: %w", err)
+		return fmt.Errorf("failed to get cache directory: %w", err)
 	}
-	ninepRequestSrc := filepath.Join(homeDir, ".cache", "homura", "src", "9pvm-request")
+	ninepRequestSrc := filepath.Join(root, "src", "9pvm-request")
 	if _, err := os.Stat(ninepRequestSrc); os.IsNotExist(err) {
 		return fmt.Errorf("9pvm-request source not found at %s (run 'make 9p' to install)", ninepRequestSrc)
 	}
@@ -542,7 +542,7 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 	}
 
 	// Copy 9pfuse source for Docker build from cache directory
-	ninepfuseSrc := filepath.Join(homeDir, ".cache", "homura", "src", "9pfuse")
+	ninepfuseSrc := filepath.Join(root, "src", "9pfuse")
 	if _, err := os.Stat(ninepfuseSrc); os.IsNotExist(err) {
 		return fmt.Errorf("9pfuse source not found at %s (run 'make 9p' to install)", ninepfuseSrc)
 	}
@@ -552,7 +552,7 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 	}
 
 	// Copy test-fs source for Docker build from cache directory
-	testfsSrc := filepath.Join(homeDir, ".cache", "homura", "src", "test-fs")
+	testfsSrc := filepath.Join(root, "src", "test-fs")
 	if _, err := os.Stat(testfsSrc); os.IsNotExist(err) {
 		return fmt.Errorf("test-fs source not found at %s (run 'make 9p' to install)", testfsSrc)
 	}
