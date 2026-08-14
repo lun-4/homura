@@ -99,7 +99,7 @@ var vmAttachCmd = &cobra.Command{
 }
 
 var vmStopCmd = &cobra.Command{
-	Use:   "stop [branch]",
+	Use:   "stop [branch|vmid]",
 	Short: "Stop a running VM and clean up its resources",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {

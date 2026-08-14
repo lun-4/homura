@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -11,19 +12,31 @@ import (
 	"github.com/lun-4/homura/internal/vm"
 )
 
-// VMStop stops a running VM. Daemon-owned VMs (those with a console socket) are
-// stopped via the daemon's stop-vm RPC; if the daemon is gone, or for
-// foreground-owned VMs, it signals the owning process directly and waits for
-// the slot to be reclaimed.
-func VMStop(branchName string) error {
-	workDir, _, err := resolveVMWorkDir(branchName, true)
-	if err != nil {
-		return err
-	}
+// VMStop stops a running VM. A numeric argument is treated as a VM id (the
+// slot number shown by `homura vm ls`) and stops that VM directly; otherwise
+// the argument is a branch name (or the default branch/cwd if omitted).
+//
+// Daemon-owned VMs (those with a console socket) are stopped via the daemon's
+// stop-vm RPC; if the daemon is gone, or for foreground-owned VMs, it signals
+// the owning process directly and waits for the slot to be reclaimed.
+func VMStop(vmIDOrBranch string) error {
+	var slot *vm.VMSlot
 
-	slot, err := selectVMSlot(workDir)
-	if err != nil {
-		return err
+	if slotNum, err := strconv.Atoi(vmIDOrBranch); err == nil {
+		slot, err = vm.FindVMBySlot(slotNum)
+		if err != nil {
+			return err
+		}
+	} else {
+		workDir, _, err := resolveVMWorkDir(vmIDOrBranch, true)
+		if err != nil {
+			return err
+		}
+
+		slot, err = selectVMSlot(workDir)
+		if err != nil {
+			return err
+		}
 	}
 
 	// pid is the process we fall back to signalling if we don't (or can't) use
