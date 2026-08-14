@@ -42,4 +42,5 @@ package vm
 // 32 - Switch guest rootfs from Debian to Ubuntu 24.04
 // 33 - Inject VM networking info (host IP, SSH port, port range) into guest CLAUDE.md
 // 34 - Warm-start speedups: size rootfs to 10G at build time + boot via qcow2 overlay (no per-start copy/resize2fs); fallocate swap; remove initramfs settle sleep; poll instead of sleep in fsmount.sh
-const VMImplementationVersion = 34
+// 35 - update to ubuntu resolute
+const VMImplementationVersion = 35
