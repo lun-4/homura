@@ -45,13 +45,18 @@ func splitRunArgs(args []string) (branch string, command []string) {
 }
 
 // buildRemoteCmd returns a shell snippet that cds into the repo's worktree
-// copy inside the guest (under /mnt/host) and runs command.
+// copy inside the guest (under /mnt/host) and runs command as a single
+// invocation: command[0] is the executable and the rest are its args.
 func buildRemoteCmd(workDir string, command []string) string {
-	parts := []string{"cd " + shellQuote("/mnt/host"+workDir)}
-	for _, c := range command {
-		parts = append(parts, shellQuote(c))
+	cmd := "cd " + shellQuote("/mnt/host"+workDir)
+	if len(command) == 0 {
+		return cmd
 	}
-	return strings.Join(parts, " && ")
+	quoted := make([]string, len(command))
+	for i, c := range command {
+		quoted[i] = shellQuote(c)
+	}
+	return cmd + " && " + strings.Join(quoted, " ")
 }
 
 // execSSHCommand replaces the current process with ssh running remoteCmd in

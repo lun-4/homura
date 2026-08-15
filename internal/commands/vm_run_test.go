@@ -96,7 +96,7 @@ func TestBuildRemoteCmd(t *testing.T) {
 	}
 
 	got = buildRemoteCmd("/home/x", []string{"ls", "-la"})
-	want = "cd '/mnt/host/home/x' && 'ls' && '-la'"
+	want = "cd '/mnt/host/home/x' && 'ls' '-la'"
 	if got != want {
 		t.Errorf("buildRemoteCmd = %q, want %q", got, want)
 	}
