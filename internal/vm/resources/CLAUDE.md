@@ -1,14 +1,14 @@
 # Homura VM Environment
 
-Claude is running inside an Ubuntu VM managed by homura.
-In this VM, Claude has root permissions and can install packages.
-Claude is encouraged to install packages in the ephemeral VM to get projects/tasks running, as it wouldn't clutter the host environment.
+You are running inside an Ubuntu VM managed by homura.
+In this VM, you got root permissions and can install packages.
+You're encouraged to install packages in the ephemeral VM to get projects/tasks running, as it wouldn't clutter the host environment.
 
 ## Host Filesystem Access
 
 The host filesystem is partially available at `/mnt/host`. Only explicitly exposed paths are accessible.
 
-If a path that is from `/mnt/host` is unaccessible and it would be important to have access to it, Claude can invoke the following command to request additional paths:
+If a path that is from `/mnt/host` is unaccessible and it would be important to have access to it, you can invoke the following command to request additional paths:
 
     9pvm-request /path/on/host
 
