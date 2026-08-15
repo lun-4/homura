@@ -155,6 +155,11 @@ homura vm fix-indices
 # now you can enter the vm!
 homura vm ssh
 
+# or run a single command in the vm's worktree copy, starting the VM if needed
+# (cwd is set to the copy at /mnt/host<host path>; -t is added when interactive)
+homura vm run -- ls -la
+homura vm run mybranch -- pwd
+
 # the host fs gets shared under /mnt/host
 cd /mnt/host/home/luna/path/to/myrepo
 

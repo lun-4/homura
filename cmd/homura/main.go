@@ -111,6 +111,15 @@ var vmStopCmd = &cobra.Command{
 	},
 }
 
+var vmRunCmd = &cobra.Command{
+	Use:   "run [branch|vmid] -- <command>...",
+	Short: "Run a command in the target VM's worktree (starts the VM if needed)",
+	Args:  cobra.ArbitraryArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return commands.VMRun(args, shareModeFlag)
+	},
+}
+
 var daemonCmd = &cobra.Command{
 	Use:    "daemon",
 	Short:  "Manage the homura VM daemon",
@@ -207,7 +216,7 @@ func init() {
 	rmCmd.Flags().BoolVarP(&forceFlag, "force", "f", false, "Force removal even with uncommitted changes")
 
 	// VM command flags
-	vmCmd.Flags().StringVar(&shareModeFlag, "share-mode", "virtiofs",
+	vmCmd.PersistentFlags().StringVar(&shareModeFlag, "share-mode", "virtiofs",
 		"Filesystem sharing mode: '9p' (default, uses FUSE) or 'virtiofs' (uses kernel driver)")
 	vmCmd.Flags().BoolVar(&vmForegroundFlag, "fg", false,
 		"Run the VM chained to this terminal instead of detached under the daemon")
@@ -225,6 +234,7 @@ func init() {
 	vmCmd.AddCommand(vmLsCmd)
 	vmCmd.AddCommand(vmAttachCmd)
 	vmCmd.AddCommand(vmStopCmd)
+	vmCmd.AddCommand(vmRunCmd)
 
 	// Add daemon subcommands
 	daemonCmd.AddCommand(daemonRunCmd)

@@ -46,6 +46,14 @@ homura vm --fg [branch-name]  # Old behavior: QEMU chained to this terminal
 # SSH into a running VM
 homura vm ssh [branch-name]
 
+# Run a command in the target worktree's VM (starts the VM if needed, then
+# runs the command with cwd set to the worktree copy at /mnt/host<path>).
+# Requests a pty (-t) when stdin is interactive, so TUIs like `claude` work.
+homura vm run [branch|vmid] -- <command>...
+#   homura vm run -- claude          # default worktree's VM, interactive
+#   homura vm run mybranch -- ls -la # a specific branch's worktree
+#   homura vm run 3 -- pwd           # a running VM by slot number
+
 # Attach an interactive serial console to a detached VM (Ctrl-] to detach).
 # The serial console is also always captured to
 # ~/.cache/homura/logs/console-slot<N>-<timestamp>.log, attached or not.
