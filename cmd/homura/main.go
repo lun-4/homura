@@ -16,6 +16,7 @@ var (
 	ninepTargetVMID  int    // Target VM by slot number
 	shareModeFlag    string // Filesystem sharing mode: "9p" or "virtiofs"
 	vmForegroundFlag bool   // Run the VM chained to this terminal (--fg)
+	vmHereFlag       bool   // Target/start the VM for the current working directory (--here)
 )
 
 var rootCmd = &cobra.Command{
@@ -220,6 +221,8 @@ func init() {
 		"Filesystem sharing mode: '9p' (default, uses FUSE) or 'virtiofs' (uses kernel driver)")
 	vmCmd.Flags().BoolVar(&vmForegroundFlag, "fg", false,
 		"Run the VM chained to this terminal instead of detached under the daemon")
+	vmCmd.PersistentFlags().BoolVar(&vmHereFlag, "here", false,
+		"Target/start the VM for the current working directory instead of a branch worktree")
 
 	rootCmd.AddCommand(cloneCmd)
 	rootCmd.AddCommand(shCmd)
@@ -251,6 +254,7 @@ func init() {
 	commands.NinePTargetDir = &ninepTargetDir
 	commands.NinePTargetPID = &ninepTargetPID
 	commands.NinePTargetVMID = &ninepTargetVMID
+	commands.VMHere = &vmHereFlag
 
 	ninepCmd.AddCommand(ninepExposeCmd)
 	ninepCmd.AddCommand(ninepUnexposeCmd)

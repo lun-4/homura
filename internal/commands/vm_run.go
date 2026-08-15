@@ -112,6 +112,14 @@ func VMRun(args []string, shareModeStr string) error {
 // branch/default is resolved to a worktree copy: an existing VM for it is
 // reused, else a new one is started under the daemon and we wait for SSH.
 func resolveVMRunSlot(branch string, shareMode vm.ShareMode) (*vm.VMSlot, error) {
+	// --here rejects any branch/slot arg; cwd resolution happens below in
+	// resolveVMWorkDir (which, with --here, returns the cwd).
+	if VMHere != nil && *VMHere {
+		if branch != "" {
+			return nil, fmt.Errorf("--here cannot be combined with a branch/slot argument")
+		}
+	}
+
 	if branch != "" {
 		if slotNum, err := strconv.Atoi(branch); err == nil {
 			slot, err := vm.FindVMBySlot(slotNum)

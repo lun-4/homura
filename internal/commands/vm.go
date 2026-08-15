@@ -20,6 +20,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// VMHere, when true, makes vm commands target the VM for the current working
+// directory instead of resolving a branch/worktree. It is set by the --here
+// persistent flag on the vm command.
+var VMHere *bool
+
 // formatRelativeTime formats a Unix millisecond timestamp as relative time
 func formatRelativeTime(createdAtMs int64) string {
 	created := time.UnixMilli(createdAtMs)
@@ -313,6 +318,15 @@ func resolveVMWorkDir(branchName string, requireCopy bool) (workDir string, reso
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", "", fmt.Errorf("failed to get current directory: %w", err)
+	}
+
+	// --here targets the current working directory and skips all branch /
+	// default-branch / worktree resolution. A branch arg is contradictory.
+	if VMHere != nil && *VMHere {
+		if branchName != "" {
+			return "", "", fmt.Errorf("--here cannot be combined with a branch argument")
+		}
+		return cwd, "", nil
 	}
 
 	if branchName != "" {

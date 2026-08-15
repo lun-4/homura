@@ -40,16 +40,21 @@ homura rm -f [branch-name]  # Force removal even with uncommitted changes
 
 # Start a VM for the worktree, detached under the homura daemon (default).
 # Streams build/boot progress, then returns; the VM keeps running.
+# --here targets the current working directory (no worktree required).
 homura vm [branch-name]
+homura vm --here            # VM for the current directory, no branch resolution
 homura vm --fg [branch-name]  # Old behavior: QEMU chained to this terminal
 
 # SSH into a running VM
 homura vm ssh [branch-name]
+homura vm ssh --here         # VM for the current directory
 
 # Run a command in the target worktree's VM (starts the VM if needed, then
 # runs the command with cwd set to the worktree copy at /mnt/host<path>).
 # Requests a pty (-t) when stdin is interactive, so TUIs like `claude` work.
+# --here boots/runs in the VM for the current directory (e.g. boot-and-run make).
 homura vm run [branch|vmid] -- <command>...
+homura vm run --here -- make   # boot current dir's VM, then run make
 #   homura vm run -- claude          # default worktree's VM, interactive
 #   homura vm run mybranch -- ls -la # a specific branch's worktree
 #   homura vm run 3 -- pwd           # a running VM by slot number
@@ -58,9 +63,11 @@ homura vm run [branch|vmid] -- <command>...
 # The serial console is also always captured to
 # ~/.cache/homura/logs/console-slot<N>-<timestamp>.log, attached or not.
 homura vm attach [branch-name]
+homura vm attach --here      # attach to the VM for the current directory
 
 # Stop a running VM and clean up (slot, sockets, ephemeral disk; console log survives)
 homura vm stop [branch-name]
+homura vm stop --here        # stop the VM for the current directory
 
 # List running VMs (shows slot, SSH port, console log path)
 homura vm ls

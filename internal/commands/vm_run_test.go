@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/lun-4/homura/internal/vm"
 )
 
 // withArgs temporarily replaces os.Args for the duration of f.
@@ -103,5 +105,38 @@ func TestBuildRemoteCmd(t *testing.T) {
 	got = buildRemoteCmd("/home/luna/it's", []string{"pwd"})
 	if !strings.Contains(got, `/mnt/host/home/luna/it'\''s`) {
 		t.Errorf("buildRemoteCmd escaping = %q", got)
+	}
+}
+
+func TestResolveVMWorkDirHere(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+
+	here := true
+	VMHere = &here
+	defer func() { VMHere = nil }()
+
+	// --here with no branch returns the cwd and no branch, no git needed.
+	workDir, branch, err := resolveVMWorkDir("", true)
+	if err != nil {
+		t.Fatalf("resolveVMWorkDir(--here) error: %v", err)
+	}
+	if workDir != cwd {
+		t.Errorf("workDir = %q, want %q", workDir, cwd)
+	}
+	if branch != "" {
+		t.Errorf("branch = %q, want empty", branch)
+	}
+
+	// --here with a branch arg must error.
+	if _, _, err := resolveVMWorkDir("mybranch", true); err == nil {
+		t.Error("resolveVMWorkDir(--here + branch) = nil, want error")
+	}
+
+	// resolveVMRunSlot must also reject a numeric-slot arg under --here.
+	if _, err := resolveVMRunSlot("3", vm.ShareModeVirtioFS); err == nil {
+		t.Error("resolveVMRunSlot(--here + slot) = nil, want error")
 	}
 }
