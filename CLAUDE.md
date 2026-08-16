@@ -144,7 +144,7 @@ Per-VM state (the 10G ephemeral rootfs disk, passt/virtiofs sockets, generated S
 }
 ```
 
-The `HOMURA_VM_STATE_DIR` environment variable overrides the config. Stale state directories from crashed VMs are removed automatically by the slot cleanup that runs on every VM start / `homura vm ls`.
+The `HOMURA_VM_STATE_DIR` environment variable overrides the config. Per-VM `homura-vm-*` dirs now live on disk (persist across reboots) and are removed on `homura vm stop` and by the stale-slot GC on crash / VM start / `homura vm ls`.
 
 ## VM Cache Directory
 

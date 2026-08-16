@@ -40,6 +40,67 @@ func checkFileDescriptorLimit(minRequired uint64) error {
 	return nil
 }
 
+// resolveStateDir resolves the base directory for per-VM state (ephemeral
+// disk, sockets). Precedence: explicit stateDirBase arg, then
+// HOMURA_VM_STATE_DIR env var, then vm.json stateDir, then the default
+// <cacheRoot>/state (which follows a relocated cacheDir). It returns whether
+// the default was applied.
+func resolveStateDir(stateDirBase, cacheRoot string, vmConfig *VMConfig) (string, bool) {
+	base := stateDirBase
+	if base == "" {
+		base = os.Getenv("HOMURA_VM_STATE_DIR")
+	}
+	if base == "" {
+		base = vmConfig.GetStateDir()
+	}
+	if base == "" {
+		return filepath.Join(cacheRoot, "state"), true
+	}
+	return base, false
+}
+
+// rootfsSizeBytes parses EphemeralDiskSize ("50G") to bytes using semantic
+// GiB (G = 1024^3 = 1073741824), matching truncate -s / resize2fs.
+func rootfsSizeBytes() (uint64, error) {
+	s := strings.ToUpper(strings.TrimSpace(EphemeralDiskSize))
+	mult := uint64(1)
+	switch {
+	case strings.HasSuffix(s, "G"):
+		mult = 1024 * 1024 * 1024
+		s = strings.TrimSuffix(s, "G")
+	case strings.HasSuffix(s, "M"):
+		mult = 1024 * 1024
+		s = strings.TrimSuffix(s, "M")
+	case strings.HasSuffix(s, "K"):
+		mult = 1024
+		s = strings.TrimSuffix(s, "K")
+	}
+	val, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return val * mult, nil
+}
+
+// checkStateDirSpace verifies that the filesystem backing dir has at least
+// minBytes of free space (using Bavail, so the root-reserved block shortfall
+// is accounted for). Returns a descriptive error directing the user to a
+// different stateDir when space is insufficient.
+func checkStateDirSpace(dir string, minBytes uint64) error {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		return fmt.Errorf("failed to statfs state directory %s: %w", dir, err)
+	}
+	avail := st.Bavail * uint64(st.Bsize)
+	if avail < minBytes {
+		return fmt.Errorf(
+			"default VM state directory %s lacks ~%s of free space (available %d bytes, need %d bytes for the ephemeral rootfs)\n"+
+				"Configure a different stateDir (preferably disk-backed) in ~/.config/homura/vm.json or via HOMURA_VM_STATE_DIR",
+			dir, EphemeralDiskSize, avail, minBytes)
+	}
+	return nil
+}
+
 // VM represents a running homura VM instance
 type VM struct {
 	WorkDir       string        // Current working directory
@@ -117,16 +178,11 @@ func NewVM(shareMode ShareMode, workDir string, stateDirBase string) (*VM, error
 		extraPaths = vmConfig.GetAllowPaths()
 	}
 
-	// Create per-VM state directory. Defaults to the system temp dir, but can
-	// be pointed at persistent storage (the ephemeral disk lives here, and on
-	// tmpfs /tmp every block the guest writes becomes resident RAM).
-	baseStateDir := stateDirBase
-	if baseStateDir == "" {
-		baseStateDir = os.Getenv("HOMURA_VM_STATE_DIR")
-	}
-	if baseStateDir == "" {
-		baseStateDir = vmConfig.GetStateDir()
-	}
+	// Create per-VM state directory. Defaults to <cacheRoot>/state (which
+	// follows a relocated cacheDir), but can be pointed at other persistent
+	// storage (the ephemeral disk lives here, and on tmpfs every block the
+	// guest writes becomes resident RAM).
+	baseStateDir, defaulted := resolveStateDir(stateDirBase, cacheRoot, vmConfig)
 	if baseStateDir != "" {
 		if err := os.MkdirAll(baseStateDir, 0o755); err != nil {
 			return nil, fmt.Errorf("failed to create state base directory %s: %w", baseStateDir, err)
@@ -135,6 +191,21 @@ func NewVM(shareMode ShareMode, workDir string, stateDirBase string) (*VM, error
 	stateDir, err := os.MkdirTemp(baseStateDir, "homura-vm-*")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create state directory: %w", err)
+	}
+
+	// When the default state dir was used (user configured nothing), fail fast
+	// if it lacks ~rootfs-size free, so the VM doesn't boot just to fill the
+	// disk and stall. An explicit stateDir is the user's responsibility.
+	if defaulted {
+		minBytes, err := rootfsSizeBytes()
+		if err != nil {
+			os.RemoveAll(stateDir)
+			return nil, fmt.Errorf("failed to parse rootfs size: %w", err)
+		}
+		if err := checkStateDirSpace(stateDir, minBytes); err != nil {
+			os.RemoveAll(stateDir)
+			return nil, err
+		}
 	}
 
 	// Unix socket paths (sun_path) are limited to ~108 bytes; passt.sock and
