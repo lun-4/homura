@@ -497,11 +497,10 @@ Built and embedded in rootfs at `/usr/local/bin/`:
 
 ### Ephemeral Disk
 
-Each VM gets a fresh rootfs:
-1. Sparse copy of base image (`cp --sparse=always`)
-2. Resize to 10GB (`truncate -s 10G`)
-3. Expand filesystem (`resize2fs`)
-4. Deleted on VM shutdown
+Each VM gets a fresh rootfs via a metadata-only qcow2 overlay backed by a pre-sized base image:
+1. The base image is grown to its final runtime size (50G) once at build time (`truncate -s 50G` + `resize2fs`), sparsely
+2. Each start creates a qcow2 overlay referencing the (read-only) sized base — no per-start copy or resize
+3. Deleted on VM shutdown
 
 No state persists between VM runs.
 

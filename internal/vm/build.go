@@ -1183,7 +1183,7 @@ resize2fs "%s"
 // EphemeralDiskSize is the runtime size of the guest rootfs. The base image
 // is grown (sparsely) to this size once at build time, so per-start disk prep
 // never needs to copy or resize anything.
-const EphemeralDiskSize = "10G"
+const EphemeralDiskSize = "50G"
 
 // CreateEphemeralDisk creates a qcow2 overlay backed by the (read-only) base
 // rootfs image. The base is already at its final runtime size, so this is a
