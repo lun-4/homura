@@ -12,8 +12,8 @@ func writeVMConfig(t *testing.T, tmp string, content string) {
 	if err := os.MkdirAll(cfgDir, 0755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(cfgDir, "vm.json"), []byte(content), 0644); err != nil {
-		t.Fatalf("write vm.json: %v", err)
+	if err := os.WriteFile(filepath.Join(cfgDir, "vm.lua"), []byte(content), 0644); err != nil {
+		t.Fatalf("write vm.lua: %v", err)
 	}
 }
 
@@ -34,7 +34,7 @@ func TestCacheDirDefault(t *testing.T) {
 func TestCacheDirAbsolute(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	writeVMConfig(t, tmp, `{"configVersion":1,"cacheDir":"/var/cache/homura-custom"}`)
+	writeVMConfig(t, tmp, `homura.config({cacheDir="/var/cache/homura-custom"})`)
 
 	got, err := CacheDir()
 	if err != nil {
@@ -49,7 +49,7 @@ func TestCacheDirAbsolute(t *testing.T) {
 func TestCacheDirTilde(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	writeVMConfig(t, tmp, `{"configVersion":1,"cacheDir":"~/custom-cache"}`)
+	writeVMConfig(t, tmp, `homura.config({cacheDir="~/custom-cache"})`)
 
 	got, err := CacheDir()
 	if err != nil {
@@ -64,7 +64,7 @@ func TestCacheDirTilde(t *testing.T) {
 func TestCacheDirRelative(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	writeVMConfig(t, tmp, `{"configVersion":1,"cacheDir":"relative/cache"}`)
+	writeVMConfig(t, tmp, `homura.config({cacheDir="relative/cache"})`)
 
 	got, err := CacheDir()
 	if err != nil {
@@ -76,12 +76,13 @@ func TestCacheDirRelative(t *testing.T) {
 	}
 }
 
-func TestCacheDirBadVersion(t *testing.T) {
+func TestCacheDirMalformedVmLua(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
-	writeVMConfig(t, tmp, `{"configVersion":999,"cacheDir":"/x"}`)
+	// A malformed vm.lua returns a parse error instead of silently defaulting.
+	writeVMConfig(t, tmp, `this is not ( lua`)
 
 	if _, err := CacheDir(); err == nil {
-		t.Fatal("CacheDir() expected error for bad configVersion, got nil")
+		t.Fatal("CacheDir() expected error for malformed vm.lua, got nil")
 	}
 }

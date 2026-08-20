@@ -42,7 +42,7 @@ func checkFileDescriptorLimit(minRequired uint64) error {
 
 // resolveStateDir resolves the base directory for per-VM state (ephemeral
 // disk, sockets). Precedence: explicit stateDirBase arg, then
-// HOMURA_VM_STATE_DIR env var, then vm.json stateDir, then the default
+// HOMURA_VM_STATE_DIR env var, then vm.lua stateDir, then the default
 // <cacheRoot>/state (which follows a relocated cacheDir). It returns whether
 // the default was applied.
 func resolveStateDir(stateDirBase, cacheRoot string, vmConfig *VMConfig) (string, bool) {

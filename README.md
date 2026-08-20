@@ -182,27 +182,37 @@ homura vm --fg fix-indices
 
 the first `homura vm` auto-spawns the daemon (`homura daemon run`, hidden command); it idle-exits ~60s after the last VM stops. daemon logs go to `~/.cache/homura/logs/daemon.log`.
 
-### vm.json
+### vm.lua
 
-homura will check `~/.config/homura/vm.json` and you can define things here:
-- `allowPaths` is a list of file paths that will be automatically exposed to the guest on vm setup.
-  - useful to put some tools or scripts to configure claude properly with yolo mode
-  - paths are `<host path>:<ro or rw>`
-- `snapshot` is a list of paths that will be snapshotted daily once you start a vm, this is a best-effort snapshot (archives the respective folders in a single .tar)
-- `stateDir` is the base directory for per-VM state, including the 50G ephemeral rootfs disk. defaults to `<cacheRoot>/state` (i.e. `~/.cache/homura/state`; follows a relocated `cacheDir`). if you point `stateDir` at tmpfs `/tmp`, everything the guest writes becomes resident RAM — with a 50G disk a heavy writer can consume tens of GB of RAM, so prefer real disk-backed storage. when no `stateDir` is configured, `homura vm` fails fast if the default state dir lacks ~50G free, telling you to set a `stateDir`. the `HOMURA_VM_STATE_DIR` environment variable overrides this setting.
+homura reads `~/.config/homura/vm.lua` (it replaced `vm.json` + `Dockerfile.custom`, which are now ignored). A single Lua script that runs sandboxed on the host and produces both the config and the custom image layer.
 
-```json
-{
-  "configVersion": 1,
-  "allowPaths": [
-    "/home/luna/.config/homura/custom-vm-bin:ro",
-  ],
-  "snapshot": [
-    "/home/luna/.claude",
-    "/home/luna/.claude.json"
-  ],
-  "stateDir": "/home.orig/luna/homura-vms"
-}
+`homura.config(...)` options (all optional):
+- `allowPaths`: list of paths auto-exposed to the guest on vm setup. useful to put some tools or scripts to configure claude; paths are `<host path>:<ro | rw>` (default rw)
+- `snapshot`: paths snapshotted daily on vm start (best-effort, single .tar)
+- `maxSnapshots`: max snapshots to keep (default 7)
+- `stateDir`: base dir for per-VM state, incl. the 50G ephemeral rootfs disk. defaults to `<cacheRoot>/state`. avoid tmpfs (every guest write becomes resident RAM)
+- `cacheDir`: relocate the cache tree under `~/.cache/homura`
+
+```lua
+homura.config({
+  allowPaths = { "/home/luna/.config/homura/custom-vm-bin:ro" },
+  snapshot = { "/home/luna/.claude", "/home/luna/.claude.json" },
+  stateDir = "/home.orig/luna/homura-vms",
+})
+```
+
+`homura.image(function(m) ... end)` builds the custom image layer. homura injects the `FROM homura-vm-ubuntu-base:v<N>` line, so you never match a version (the old Dockerfile.custom version-mismatch pitfall is gone). Primitives: `m:aptUpdate()`, `m:aptInstall("vim","tmux")` (sorted, one RUN each), `m:run(cmd)`, `m:env(k,v)`, `m:profile(line)`, `m:fishProfile(line)`, `m:curl(url,dest)`, `m:tarExtract(archive,dir)`, `m:symlinkFromHost(host,guest,opts?)` (auto-registers in `allowPaths`; `{rw=true}`, `{noExpose=true}`), `m:linkDotClaudeFromHost()`. Core recipes: `addDockerUbuntuRepo`, `installHelix`, `installGo`, `installElixir`, `installClaude`, `installRust`, `installPolytoken`, `installPi`.
+
+```lua
+homura.image(function(m)
+  m:installGo("1.24.0")
+  m:installHelix("25.07.1")
+  m:installElixir()
+  m:installClaude("2.1.233")
+  m:installRust()
+  m:installPolytoken()
+  m:installPi()
+end)
 ```
 
 
