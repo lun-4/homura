@@ -36,6 +36,7 @@ end)
 		"mkdir -p /root/helix && curl -fsSL https://github.com/helix-editor/helix/releases/download/25.07.1/helix-25.07.1-x86_64-linux.tar.xz",
 		"RUN go install golang.org/dl/go1.24.0@latest && go1.24.0 download",
 		"RUN mix local.hex --force && mix local.rebar --force",
+		"RUN curl -fsSL https://claude.ai/install.sh | bash",
 		"RUN ~/.local/bin/claude update 2.1.233 && ~/.local/bin/claude --version | grep -qF \"2.1.233\"",
 		"RUN curl -fsSL https://sh.rustup.rs -o /tmp/rustup-init",
 		"RUN curl -fsS https://get.polytoken.dev | bash",

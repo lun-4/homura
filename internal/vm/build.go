@@ -644,29 +644,15 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 		finalImageName = customImageName
 	}
 
-	// Export container to tar
-	tarPath := filepath.Join(tmpDir, "rootfs.tar")
-	slog.Info("Exporting container to tar")
-
-	containerName := fmt.Sprintf("homura-temp-%x", sha256.Sum256([]byte(tarPath)))
+	// Create the export container once; the actual export is streamed straight
+	// into the staging extract under fakeroot (below) so we never materialize
+	// a rootfs.tar on disk.
+	containerName := fmt.Sprintf("homura-temp-%x", sha256.Sum256([]byte(finalImageName)))
 	cmd := exec.Command(dockerCmd, "create", "--name", containerName, finalImageName)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("%s create failed: %w", dockerCmd, err)
 	}
 	defer exec.Command(dockerCmd, "rm", "-f", containerName).Run() // Force remove to handle stuck containers
-
-	tarFile, err := os.Create(tarPath)
-	if err != nil {
-		return err
-	}
-	defer tarFile.Close()
-
-	cmd = exec.Command(dockerCmd, "export", containerName)
-	cmd.Stdout = tarFile
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("%s export failed: %w", dockerCmd, err)
-	}
-	tarFile.Close()
 
 	// Extract kernel modules from modloop (this runs as current user, before fakeroot)
 	slog.Info("Extracting kernel modules from modloop")
@@ -1044,8 +1030,9 @@ WantedBy=multi-user.target
 	// Use kver="" if we couldn't detect it to skip module copying
 	fakerootScript := fmt.Sprintf(`set -e
 
-# 1. Extract Docker tar into staging dir
-tar --same-owner -xf "%s" -C "%s"
+# 1. Stream the container export straight into the staging dir (no rootfs.tar
+#    on disk). Runs under fakeroot so ownership from the tar headers is honored.
+%s export %s | tar --same-owner -xC "%s"
 
 # 2. Remove Docker markers
 rm -f "%s/.dockerenv"
@@ -1076,7 +1063,7 @@ ln -sf /etc/systemd/system/homura-docker-modules.service "%s/etc/systemd/system/
 mkdir -p "%s/etc/homura/claude-config"
 cp "%s/CLAUDE.md" "%s/etc/homura/claude-config/CLAUDE.md"
 `,
-		tarPath, stagingDir,
+		dockerCmd, containerName, stagingDir,
 		stagingDir,
 		stagingDir,
 		injectDir, stagingDir,
@@ -1133,24 +1120,14 @@ depmod -b "%s" "%s" || true
 mkdir -p "%s/etc/ssh"
 cp -a "%s"/* "%s/etc/ssh/" 2>/dev/null || true
 
-# 7. Size the ext4 image based on the staged rootfs with extra headroom.
-ROOTFS_KB=$(du -sk "%s" | cut -f1)
-ROOTFS_KB=$((ROOTFS_KB + ROOTFS_KB / 3 + 524288))
-MIN_ROOTFS_KB=$((3072 * 1024))
-if [ "$ROOTFS_KB" -lt "$MIN_ROOTFS_KB" ]; then
-    ROOTFS_KB=$MIN_ROOTFS_KB
-fi
-truncate -s "${ROOTFS_KB}K" "%s"
-mke2fs -q -t ext4 -O "^metadata_csum,^64bit" -E root_owner=0:0 -L rootfs -d "%s" "%s"
-
-# 8. Grow the image to its final runtime size once, at build time, so that
-# per-start disk prep is a metadata-only qcow2 overlay (no copy, no resize2fs).
-# The file stays sparse, so cache disk usage barely changes.
+# 7. Create the ext4 image at its final runtime size in one pass. mke2fs -d
+#    populates the (sparse) file directly from the staging tree, so there is no
+#    intermediate undersized image and no resize2fs pass. The file stays sparse,
+#    so cache disk usage tracks the staged content, not the 50G virtual size.
 truncate -s %s "%s"
-resize2fs "%s"
+mke2fs -q -t ext4 -E root_owner=0:0 -L rootfs -d "%s" "%s"
 `, stagingDir, paths.SSHHostKeysDir, stagingDir,
-		stagingDir, tmpRootfs, stagingDir, tmpRootfs,
-		EphemeralDiskSize, tmpRootfs, tmpRootfs,
+		EphemeralDiskSize, tmpRootfs, stagingDir, tmpRootfs,
 	)
 
 	// Write the script to a temp file and run it under fakeroot

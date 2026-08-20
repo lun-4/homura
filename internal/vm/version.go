@@ -44,4 +44,5 @@ package vm
 // 34 - Warm-start speedups: size rootfs to 10G at build time + boot via qcow2 overlay (no per-start copy/resize2fs); fallocate swap; remove initramfs settle sleep; poll instead of sleep in fsmount.sh
 // 35 - update to ubuntu resolute
 // 36 - Increase VM rootfs size from 10G to 50G; default per-VM stateDir to <cacheRoot>/state with a free-space pre-flight guard
-const VMImplementationVersion = 36
+// 37 - Build efficiency: stream docker export into staging (no rootfs.tar), single-pass mke2fs -d at full size (no resize2fs), drop obsolete mke2fs feature-disable workaround; remove Claude Code from base image (install via vm.lua installClaude); default VM vCPUs to 50% of host cores
+const VMImplementationVersion = 37

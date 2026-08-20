@@ -67,9 +67,11 @@ func (b *Builder) installElixir(hex, rebar bool) {
 	}
 }
 
-// installClaude pins the Claude Code CLI (version, e.g. "2.1.233") and verifies
-// it.
+// installClaude installs and pins the Claude Code CLI (version, e.g.
+// "2.1.233") and verifies it. Claude is no longer in the base image, so this
+// recipe performs the full install.
 func (b *Builder) installClaude(version string) {
+	b.run("curl -fsSL https://claude.ai/install.sh | bash")
 	b.run(fmt.Sprintf("~/.local/bin/claude update %s && ~/.local/bin/claude --version | grep -qF %q", version, version))
 }
 

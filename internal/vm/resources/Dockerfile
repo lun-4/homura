@@ -50,15 +50,8 @@ RUN echo "$SSH_PUB_KEY" > /root/.ssh/authorized_keys && chmod 600 /root/.ssh/aut
 # Set hostname
 RUN echo "homura-vm" > /etc/hostname
 
-# Install Claude Code
-RUN curl -fsSL https://claude.ai/install.sh | bash
-RUN ~/.local/bin/claude update
-
-# remove claude code files, make sure this install is clean
-# because we'll symlink with the host later
-RUN rm -frv ~/.claude
-RUN rm -fv ~/.claude.json
-RUN rm -fv ~/.claude.json.backup
+# Claude Code is intentionally NOT installed in the base image. Add it per-VM
+# via the vm.lua recipe:  m:installClaude("2.1.233")
 
 # Use multi-user.target and suppress getty noise on tty1/ttyS0.
 RUN ln -sf /lib/systemd/system/multi-user.target /etc/systemd/system/default.target && \
