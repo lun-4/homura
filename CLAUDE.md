@@ -73,75 +73,102 @@ homura vm stop --here        # stop the VM for the current directory
 homura vm ls
 ```
 
-## VM Customization
+## VM Customization (vm.lua)
 
-You can customize the VM image by creating a custom Dockerfile at `~/.config/homura/Dockerfile.custom`:
+VM customization is driven by a single declarative Lua script at `~/.config/homura/vm.lua`. It replaces the old `vm.json` (config) and `Dockerfile.custom` (image) files — those are now ignored. The Lua runs on the host at build/config time under a sandbox that exposes only the `homura` table; it produces the config (paths to expose, snapshots, cache/state dirs) and the generated Dockerfile for the custom image.
 
 ```bash
-# Create custom Dockerfile
 mkdir -p ~/.config/homura
-vim ~/.config/homura/Dockerfile.custom
+vim ~/.config/homura/vm.lua
 ```
 
-Example customizations:
+### `homura.config`
 
-```dockerfile
-FROM homura-vm-alpine-base:v4
-
-# Add packages
-RUN apk add --no-cache vim tmux ripgrep
-
-# Install Python packages
-RUN pip install --break-system-packages anthropic
-
-# Set environment variables
-ENV MY_VAR=value
-
-# Configure shell (fish is default)
-RUN echo 'set -gx MY_VAR value' >> /root/.config/fish/config.fish
+```lua
+homura.config({
+  cacheDir = "/var/cache/homura",          -- optional cache root
+  stateDir = "/mnt/persistent/homura-vms", -- optional per-VM state dir
+  allowPaths = {                           -- optional extra paths to expose
+    "/home/luna/.config/fish:ro",
+    "/home/luna/projects:rw",
+    "/home/luna/bin",
+  },
+  snapshot = { "/home/luna/projects" },    -- optional snapshot paths
+  maxSnapshots = 7,                        -- optional (default 7)
+})
 ```
 
-The custom image is automatically built when you run `homura vm`. Images are cached based on file content (MD5 hash), so rebuilds only happen when you modify the Dockerfile.
+**Path format:** `/path:ro` read-only, `/path:rw` or `/path` read-write (default). The current working directory is always auto-exposed read-write. There is no `configVersion` — homura's own version gates compatibility.
 
-**Important:** The FROM line must match the current homura version. When homura is updated and the version changes, you must update the FROM line in your Dockerfile.custom or you'll get a version mismatch error with instructions on how to fix it.
+### `homura.image`
 
-**Note:** You cannot use `COPY` in custom Dockerfiles to copy files from the host. Use 9p mounts instead:
+`homura.image(function(m) ... end)` builds the custom Dockerfile layer. Homura injects the `FROM homura-vm-ubuntu-base:v<N>` line itself, so you never need to match a version (the old Dockerfile.custom version-mismatch footgun is gone). Builder primitives:
+
+```lua
+homura.image(function(m)
+  m:aptUpdate()                                            -- RUN apt-get update
+  m:aptInstall("vim", "tmux")                              -- one sorted RUN per package
+  m:run("raw shell command")                               -- escape hatch
+  m:env("MY_VAR", "value")                                 -- ENV MY_VAR=value
+  m:profile("export EDITOR=hx")                            -- append to /etc/profile
+  m:fishProfile("set -gx EDITOR hx")                       -- append to fish config
+  m:curl("https://example.com/tool", "/tmp/tool")          -- download
+  m:tarExtract("/tmp/tool.tar.xz", "/opt")                 -- extract
+  m:symlinkFromHost("/home/luna/.tool", "/root/.tool")     -- read-only by default; {rw=true} for rw; also registers the path in allowPaths
+  m:linkDotClaudeFromHost()                                -- symlink ~/.claude(+json) from host
+end)
+```
+
+`symlinkFromHost(hostPath, guestPath, opts?)` emits `RUN ln -s /mnt/host/<hostPath> <guestPath>` and auto-registers `hostPath` in `allowPaths` (matching ro/rw), unless `{noExpose=true}`. `~/.claude` / `~/.claude.json` are already auto-exposed, so `linkDotClaudeFromHost` needs no allowPaths entry.
+
+### Core recipes (built into homura)
+
+Composable recipes built on the primitives:
+
+```lua
+homura.image(function(m)
+  m:addDockerUbuntuRepo()          -- Docker apt repo + apt-get update
+  m:installHelix("25.07.1")        -- static Helix to /root/helix
+  m:installGo("1.24.0")            -- golang.org/dl toolchain; {downloadViaSystemGo=true} via /usr/bin/go
+  m:installElixir()                -- mix local.hex / local.rebar ({hex=false},{rebar=false} to toggle)
+  m:installClaude("2.1.233")       -- pin the Claude Code CLI
+  m:installRust()                  -- rustup stable
+  m:installPolytoken()             -- get.polytoken.dev + rw symlinks for ~/.cache|.config|.local/share/polytoken only (NOT whole dirs)
+  m:installPi()                    -- fd-find, node/npm, pi install + rw ~/.pi symlink (exposes only ~/.pi/agent)
+end)
+```
+
+A complete example that mirrors a typical setup:
+
+```lua
+homura.image(function(m)
+  m:addDockerUbuntuRepo()
+  m:aptInstall("docker-ce", "docker-ce-cli", "containerd.io", "docker-compose-plugin")
+  m:aptUpdate()
+  m:installGo("1.24.0")
+  m:installHelix("25.07.1")
+  m:installClaude("2.1.233")
+  m:installRust()
+  m:installPolytoken()
+  m:installPi()
+  m:linkDotClaudeFromHost()
+end)
+```
+
+The custom image is auto-built when you run `homura vm`. Rebuilds are driven by a content hash (recipe output + base image ID), so a recipe change rebuilds without a version bump.
+
+**Note:** You cannot use `COPY` to copy files from the host. Use 9p mounts instead:
 ```bash
 homura 9p expose /path/to/files
 # Files accessible at /mnt/host inside VM
 ```
 
-## Persistent Path Configuration
-
-You can configure paths to be automatically exposed every time a VM starts by creating `~/.config/homura/vm.json`:
-
-```json
-{
-  "configVersion": 1,
-  "allowPaths": [
-    "/home/luna/.config/fish:ro",
-    "/home/luna/projects:rw",
-    "/home/luna/bin"
-  ]
-}
-```
-
-**Path format:**
-- `/path:ro` - expose as read-only
-- `/path:rw` - expose as read-write (explicit)
-- `/path` - expose as read-write (default)
-
-**Note:** The current working directory is always exposed as read-write, regardless of this config. The `allowPaths` setting adds *additional* persistent paths.
-
 ## VM State Directory
 
 Per-VM state (the 10G ephemeral rootfs disk, passt/virtiofs sockets, generated SSH keys) lives in a `homura-vm-*` directory under the system temp dir by default. If `/tmp` is tmpfs, every block the guest writes to its disk becomes resident RAM — configure a disk-backed location to run multiple VMs without RAM pressure:
 
-```json
-{
-  "configVersion": 1,
-  "stateDir": "/home.orig/luna/homura-vms"
-}
+```lua
+homura.config({ stateDir = "/home.orig/luna/homura-vms" })
 ```
 
 The `HOMURA_VM_STATE_DIR` environment variable overrides the config. Per-VM `homura-vm-*` dirs now live on disk (persist across reboots) and are removed on `homura vm stop` and by the stale-slot GC on crash / VM start / `homura vm ls`.
@@ -150,21 +177,17 @@ The `HOMURA_VM_STATE_DIR` environment variable overrides the config. Per-VM `hom
 
 By default homura keeps its cache tree (VM images, `ssh_host_keys/`, `bin/`, `src/`, `snapshots/`, `logs/`) under `~/.cache/homura`. You can relocate the entire tree with the `cacheDir` key, accepting an absolute path or a `~/...` path:
 
-```json
-{
-  "configVersion": 1,
-  "cacheDir": "/var/cache/homura",
-  "stateDir": "/home.orig/luna/homura-vms"
-}
+```lua
+homura.config({
+  cacheDir = "/var/cache/homura",
+  stateDir = "/home.orig/luna/homura-vms",
+})
 ```
 
 Or a home-relative path:
 
-```json
-{
-  "configVersion": 1,
-  "cacheDir": "~/homura-cache"
-}
+```lua
+homura.config({ cacheDir = "~/homura-cache" })
 ```
 
 `cacheDir` is resolved with `filepath.Abs` and, when relative, against the current working directory; a leading `~/` is expanded to the user's home. When the key is absent, the default `~/.cache/homura` is used, so existing setups are unaffected.
@@ -191,16 +214,17 @@ docker run --rm alpine echo "Hello from Docker"
 - **Networking:** Uses `iptables-legacy` (nftables kernel support not included)
 - **Boot modules:** Required kernel modules (overlay, bridge, veth, netfilter) are automatically loaded via `/etc/local.d/01docker-modules.start`
 
-### Custom Dockerfile for Persistent Docker
+### Custom Image for Persistent Docker
 
-To have Docker pre-installed and auto-started in every VM, create `~/.config/homura/Dockerfile.custom`:
+To have Docker pre-installed and auto-started in every VM, add it via `vm.lua`:
 
-```dockerfile
-FROM homura-vm-alpine-base:v25
-
-# Install and enable Docker
-RUN apk add --no-cache docker docker-cli-buildx && \
-    rc-update add docker default
+```lua
+homura.image(function(m)
+  m:addDockerUbuntuRepo()
+  m:aptUpdate()
+  m:aptInstall("docker-ce", "docker-ce-cli", "containerd.io", "docker-compose-plugin")
+  m:run("systemctl enable --now docker")
+end)
 ```
 
 ## 9p Filesystem Passthrough
@@ -326,8 +350,8 @@ The build system creates VM images in `~/.cache/homura/v{VERSION}/vm-images/alpi
    - SSH: key-only auth
    - OpenRC configured for non-container mode
 
-4. **Custom Dockerfile support:**
-   - Optional `~/.config/homura/Dockerfile.custom`
+4. **Custom image support (via vm.lua):**
+   - Optional `homura.image` block in `~/.config/homura/vm.lua`
    - Hash-based caching (rebuilds only when content changes)
 
 5. **Rootfs image creation:**
@@ -423,7 +447,7 @@ The `9passthrough` binary (`~/.cache/homura/bin/9passthrough`) provides the host
 2. `~/.claude.json` if exists (read-write)
 3. `~/.claude/` if exists (read-write)
 4. `~/.config/homura/CLAUDE.md` if exists (read-only)
-5. Custom exposed paths from `~/.config/homura/vm.json` (this is configured by the user)
+5. Custom exposed paths from `~/.config/homura/vm.lua` (`homura.config.allowPaths`), plus any paths auto-registered by `symlinkFromHost` recipes
 
 **Token authentication:**
 - 256-bit random token generated at startup
@@ -513,12 +537,12 @@ No state persists between VM runs.
 
 ### Snapshots (Optional)
 
-Configure in `~/.config/homura/vm.json`:
-```json
-{
-  "snapshot": ["/home/user/projects"],
-  "maxSnapshots": 7
-}
+Configure snapshots in `homura.config` via `vm.lua`:
+```lua
+homura.config({
+  snapshot = { "/home/user/projects" },
+  maxSnapshots = 7,
+})
 ```
 
 - Snapshots paths before each VM start

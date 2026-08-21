@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -42,7 +43,7 @@ func checkFileDescriptorLimit(minRequired uint64) error {
 
 // resolveStateDir resolves the base directory for per-VM state (ephemeral
 // disk, sockets). Precedence: explicit stateDirBase arg, then
-// HOMURA_VM_STATE_DIR env var, then vm.json stateDir, then the default
+// HOMURA_VM_STATE_DIR env var, then vm.lua stateDir, then the default
 // <cacheRoot>/state (which follows a relocated cacheDir). It returns whether
 // the default was applied.
 func resolveStateDir(stateDirBase, cacheRoot string, vmConfig *VMConfig) (string, bool) {
@@ -57,6 +58,16 @@ func resolveStateDir(stateDirBase, cacheRoot string, vmConfig *VMConfig) (string
 		return filepath.Join(cacheRoot, "state"), true
 	}
 	return base, false
+}
+
+// defaultVCPUs returns half the host's CPU cores (minimum 1) to give each VM
+// headroom while leaving cores for the host and sibling VMs.
+func defaultVCPUs() int {
+	n := runtime.NumCPU() / 2
+	if n < 1 {
+		return 1
+	}
+	return n
 }
 
 // rootfsSizeBytes parses EphemeralDiskSize ("50G") to bytes using semantic
@@ -522,7 +533,7 @@ func (vm *VM) Start(opts StartOptions) error {
 		InitrdPath:  images.InitramfsPath,
 		RootfsPath:  ephemeralDisk,
 		Memory:      4096, // 4GB
-		CPUs:        4,
+		CPUs:        defaultVCPUs(),
 		PasstSocket: vm.PasstManager.SocketPath,
 		HostHomeDir: vm.HostHomeDir,
 		ShareMode:   vm.ShareMode,

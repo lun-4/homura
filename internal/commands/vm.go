@@ -70,6 +70,10 @@ func RunVM(cmd *cobra.Command, args []string, branchName string, shareModeStr st
 
 	slog.Info("Starting homura VM", "share_mode", shareMode, "foreground", foreground)
 
+	// HOMURA_DUMP_DOCKERFILE=1: dump the vm.lua-generated Dockerfile in this
+	// process (the daemon may not have the env var).
+	vm.DumpCustomDockerfile()
+
 	// Resolve the branch (or default branch) to an existing worktree
 	copyPath, branchName, err := resolveVMWorkDir(branchName, true)
 	if err != nil {
@@ -78,55 +82,53 @@ func RunVM(cmd *cobra.Command, args []string, branchName string, shareModeStr st
 
 	slog.Info("Running VM in copy", "branch", branchName, "path", copyPath)
 
-	// Create example custom Dockerfile if config directory doesn't exist
+	// Create example vm.lua if config directory doesn't exist
 	configDir := filepath.Join(os.Getenv("HOME"), ".config", "homura")
-	examplePath := filepath.Join(configDir, "Dockerfile.custom.example")
+	examplePath := filepath.Join(configDir, "vm.lua.example")
 
 	if _, err := os.Stat(examplePath); os.IsNotExist(err) {
 		os.MkdirAll(configDir, 0755)
 
-		exampleContent := fmt.Sprintf(`# homura VM Custom Dockerfile
-# This file extends the base VM image with your customizations
-# Copy to Dockerfile.custom and edit to apply changes
-#
-# IMPORTANT: The FROM line must match the current homura version
-# When homura updates, you must update this FROM line to match
+		exampleContent := `-- homura VM customization (vm.lua)
+-- Copy to vm.lua and edit to apply. homura owns the FROM/base image, so you
+-- never need to match a version. vm.json and Dockerfile.custom are ignored.
 
-FROM homura-vm-ubuntu-base:v%d
+homura.config({
+  -- cacheDir = "/var/cache/homura",
+  -- stateDir = "/mnt/persistent/homura-vms",
+  -- allowPaths = { "/home/you/projects", "/home/you/bin:ro" },
+  -- snapshot = { "/home/you/projects" },
+  -- maxSnapshots = 7,
+})
 
-# Example: Add additional packages
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    vim \
-    neovim \
-    tmux \
-    ripgrep \
-    fd-find \
-    bat \
-    && rm -rf /var/lib/apt/lists/*
+homura.image(function(m)
+  -- m:aptUpdate()
+  -- m:aptInstall("vim", "tmux")             -- sorted, one RUN per package
+  -- m:run("echo 'export PATH=$PATH:/x' >> /root/.profile")
+  -- m:env("MY_VAR", "value")
+  -- m:profile("export EDITOR=hx")
+  -- m:fishProfile("set -gx EDITOR hx")
+  -- m:curl("https://example.com/tool", "/tmp/tool")
+  -- m:tarExtract("/tmp/tool.tar.xz", "/opt")
+  -- m:symlinkFromHost("/home/you/.tool", "/root/.tool", {rw=true})
+  -- m:linkDotClaudeFromHost()
 
-# Example: Install Python packages
-RUN pip install --break-system-packages \
-    anthropic \
-    requests \
-    numpy
-
-# Example: Set environment variables
-ENV MY_CUSTOM_VAR=value
-
-# Example: Add custom PATH entries
-RUN echo 'export PATH=$PATH:/custom/bin' >> /root/.profile
-
-# Example: Configure shell (fish is default)
-RUN echo 'set -gx MY_VAR value' >> /root/.config/fish/config.fish
-
-# Note: You cannot COPY files from host in this Dockerfile
-# Use 9p mounts instead: homura 9p expose /path/to/files
-`, vm.VMImplementationVersion)
+  -- Core recipes:
+  -- m:addDockerUbuntuRepo()
+  -- m:installHelix("25.07.1")
+  -- m:installGo("1.24.0")
+  -- m:installElixir()
+  -- m:installClaude("2.1.233")
+  -- m:installRust()
+  -- m:installPolytoken()
+  -- m:installPi()
+end)
+`
 
 		if err := os.WriteFile(examplePath, []byte(exampleContent), 0644); err != nil {
-			slog.Warn("Failed to create example Dockerfile", "error", err)
+			slog.Warn("Failed to create example vm.lua", "error", err)
 		} else {
-			slog.Info("Created example custom Dockerfile", "path", examplePath)
+			slog.Info("Created example vm.lua", "path", examplePath)
 		}
 	}
 

@@ -489,24 +489,29 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 
 	// Determine final rootfs filename and image name BEFORE checking if rootfs exists
 	finalImageName := baseImageName
-	customDockerfilePath := filepath.Join(os.Getenv("HOME"), ".config", "homura", "Dockerfile.custom")
 	var customContent []byte
 	hasCustomDockerfile := false
 
-	if fileInfo, err := os.Stat(customDockerfilePath); err == nil && !fileInfo.IsDir() {
-		if content, err := os.ReadFile(customDockerfilePath); err == nil {
-			customContent = content
-			hasCustomDockerfile = true
+	// Load the Lua-driven VM config to decide the custom image layer.
+	vmConfig, cfgErr := LoadVMConfig()
+	if cfgErr != nil {
+		return fmt.Errorf("failed to load VM config: %w", cfgErr)
+	}
+	if hasCustom, content, _ := customImageDecision(vmConfig, ""); hasCustom {
+		customContent = content
+		hasCustomDockerfile = true
 
-			// If base image exists, calculate the hash for rootfs filename
-			if baseImageID != "" {
-				combinedHash := hashCustomImage(customContent, baseImageID)
-				newRootfsFilename := fmt.Sprintf("rootfs-%s.ext4", combinedHash)
-				paths.RootfsPath = filepath.Join(paths.CacheDir, newRootfsFilename)
-				slog.Debug("Using custom rootfs filename", "filename", newRootfsFilename, "hash", combinedHash)
-			}
+		// If base image exists, calculate the hash for rootfs filename
+		if baseImageID != "" {
+			combinedHash := hashCustomImage(customContent, baseImageID)
+			newRootfsFilename := fmt.Sprintf("rootfs-%s.ext4", combinedHash)
+			paths.RootfsPath = filepath.Join(paths.CacheDir, newRootfsFilename)
+			slog.Debug("Using custom rootfs filename", "filename", newRootfsFilename, "hash", combinedHash)
 		}
 	}
+
+	// HOMURA_DUMP_DOCKERFILE=1 is handled client-side (see DumpCustomDockerfile);
+	// the daemon that runs this build may predate the env var, so don't dump here.
 
 	// Now check if rootfs already exists (with the correct filename)
 	if _, err := os.Stat(paths.RootfsPath); err == nil {
@@ -591,36 +596,28 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 		slog.Info("Using cached container base image")
 	}
 
-	// Handle custom Dockerfile
+	// Handle custom Dockerfile (generated from vm.lua, homura owns the FROM line)
 	if hasCustomDockerfile {
-		slog.Info("Found custom Dockerfile", "path", customDockerfilePath)
+		slog.Info("Found custom image from vm.lua")
 
-		// Validate FROM line matches current version
-		expectedFrom := fmt.Sprintf("FROM homura-vm-ubuntu-base:v%d", VMImplementationVersion)
-		if err := validateCustomDockerfileVersion(string(customContent), expectedFrom); err != nil {
-			return fmt.Errorf("invalid custom Dockerfile: %w\n\nPlease update %s:\n  Change the FROM line to: %s",
-				err, customDockerfilePath, expectedFrom)
-		}
-
-		// Calculate hash combining Dockerfile content + base image ID
-		// This ensures rebuild when either the custom Dockerfile OR base image changes
-		combinedHash := hashCustomImage(customContent, baseImageID)
-		customImageName := fmt.Sprintf("homura-vm-ubuntu-custom:%s", combinedHash)
+		// Derive the custom image name from content + base image ID (homura owns
+		// the FROM line, so no version-mismatch validation is needed).
+		_, _, customImageName := customImageDecision(vmConfig, baseImageID)
 
 		// Check if custom image already exists
 		checkCmd := exec.Command(dockerCmd, "image", "inspect", customImageName)
 		if err := checkCmd.Run(); err != nil {
 			// Image doesn't exist, build it
-			slog.Info("Building custom image", "tag", customImageName, "hash", combinedHash)
+			slog.Info("Building custom image", "tag", customImageName, "hash", customImageName)
 
 			// Create temporary build directory
-			tmpCustomDir := filepath.Join(os.TempDir(), fmt.Sprintf("homura-custom-build-%s", combinedHash))
+			tmpCustomDir := filepath.Join(os.TempDir(), fmt.Sprintf("homura-custom-build-%s", strings.TrimPrefix(customImageName, "homura-vm-ubuntu-custom:")))
 			if err := os.MkdirAll(tmpCustomDir, 0755); err != nil {
 				return fmt.Errorf("create temp custom build dir: %w", err)
 			}
 			defer os.RemoveAll(tmpCustomDir)
 
-			// Write user's Dockerfile as-is (no modification)
+			// Write the generated Dockerfile as-is (FROM line already correct)
 			customDockerfile := filepath.Join(tmpCustomDir, "Dockerfile")
 			if err := os.WriteFile(customDockerfile, customContent, 0644); err != nil {
 				return fmt.Errorf("write custom Dockerfile: %w", err)
@@ -647,29 +644,15 @@ func buildRootfs(paths *ImagePaths, sshPubKeyPath string) error {
 		finalImageName = customImageName
 	}
 
-	// Export container to tar
-	tarPath := filepath.Join(tmpDir, "rootfs.tar")
-	slog.Info("Exporting container to tar")
-
-	containerName := fmt.Sprintf("homura-temp-%x", sha256.Sum256([]byte(tarPath)))
+	// Create the export container once; the actual export is streamed straight
+	// into the staging extract under fakeroot (below) so we never materialize
+	// a rootfs.tar on disk.
+	containerName := fmt.Sprintf("homura-temp-%x", sha256.Sum256([]byte(finalImageName)))
 	cmd := exec.Command(dockerCmd, "create", "--name", containerName, finalImageName)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("%s create failed: %w", dockerCmd, err)
 	}
 	defer exec.Command(dockerCmd, "rm", "-f", containerName).Run() // Force remove to handle stuck containers
-
-	tarFile, err := os.Create(tarPath)
-	if err != nil {
-		return err
-	}
-	defer tarFile.Close()
-
-	cmd = exec.Command(dockerCmd, "export", containerName)
-	cmd.Stdout = tarFile
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("%s export failed: %w", dockerCmd, err)
-	}
-	tarFile.Close()
 
 	// Extract kernel modules from modloop (this runs as current user, before fakeroot)
 	slog.Info("Extracting kernel modules from modloop")
@@ -1047,8 +1030,9 @@ WantedBy=multi-user.target
 	// Use kver="" if we couldn't detect it to skip module copying
 	fakerootScript := fmt.Sprintf(`set -e
 
-# 1. Extract Docker tar into staging dir
-tar --same-owner -xf "%s" -C "%s"
+# 1. Stream the container export straight into the staging dir (no rootfs.tar
+#    on disk). Runs under fakeroot so ownership from the tar headers is honored.
+%s export %s | tar --same-owner -xC "%s"
 
 # 2. Remove Docker markers
 rm -f "%s/.dockerenv"
@@ -1079,7 +1063,7 @@ ln -sf /etc/systemd/system/homura-docker-modules.service "%s/etc/systemd/system/
 mkdir -p "%s/etc/homura/claude-config"
 cp "%s/CLAUDE.md" "%s/etc/homura/claude-config/CLAUDE.md"
 `,
-		tarPath, stagingDir,
+		dockerCmd, containerName, stagingDir,
 		stagingDir,
 		stagingDir,
 		injectDir, stagingDir,
@@ -1136,24 +1120,14 @@ depmod -b "%s" "%s" || true
 mkdir -p "%s/etc/ssh"
 cp -a "%s"/* "%s/etc/ssh/" 2>/dev/null || true
 
-# 7. Size the ext4 image based on the staged rootfs with extra headroom.
-ROOTFS_KB=$(du -sk "%s" | cut -f1)
-ROOTFS_KB=$((ROOTFS_KB + ROOTFS_KB / 3 + 524288))
-MIN_ROOTFS_KB=$((3072 * 1024))
-if [ "$ROOTFS_KB" -lt "$MIN_ROOTFS_KB" ]; then
-    ROOTFS_KB=$MIN_ROOTFS_KB
-fi
-truncate -s "${ROOTFS_KB}K" "%s"
-mke2fs -q -t ext4 -O "^metadata_csum,^64bit" -E root_owner=0:0 -L rootfs -d "%s" "%s"
-
-# 8. Grow the image to its final runtime size once, at build time, so that
-# per-start disk prep is a metadata-only qcow2 overlay (no copy, no resize2fs).
-# The file stays sparse, so cache disk usage barely changes.
+# 7. Create the ext4 image at its final runtime size in one pass. mke2fs -d
+#    populates the (sparse) file directly from the staging tree, so there is no
+#    intermediate undersized image and no resize2fs pass. The file stays sparse,
+#    so cache disk usage tracks the staged content, not the 50G virtual size.
 truncate -s %s "%s"
-resize2fs "%s"
+mke2fs -q -t ext4 -E root_owner=0:0 -L rootfs -d "%s" "%s"
 `, stagingDir, paths.SSHHostKeysDir, stagingDir,
-		stagingDir, tmpRootfs, stagingDir, tmpRootfs,
-		EphemeralDiskSize, tmpRootfs, tmpRootfs,
+		EphemeralDiskSize, tmpRootfs, stagingDir, tmpRootfs,
 	)
 
 	// Write the script to a temp file and run it under fakeroot
@@ -1253,39 +1227,61 @@ func copyTree(src, dst string) error {
 	})
 }
 
-// validateCustomDockerfileVersion checks that the FROM line matches expected base image version
-func validateCustomDockerfileVersion(content, expectedFrom string) error {
-	// Parse FROM line (handles comments and whitespace)
-	lines := strings.Split(content, "\n")
-	var fromLine string
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "FROM ") {
-			fromLine = trimmed
-			break
-		}
+// customImageDecision is a pure helper that decides whether a custom image
+// layer is needed and derives its name. When vmConfig has no custom Dockerfile
+// it returns hasCustom=false. Otherwise it returns the generated bytes and the
+// custom image name `homura-vm-ubuntu-custom:<hash>` derived from the content
+// and (optionally) the base image ID. Homura owns the FROM line, so there is no
+// version-mismatch validation.
+func customImageDecision(vmConfig *VMConfig, baseImageID string) (hasCustom bool, content []byte, imageName string) {
+	if vmConfig == nil || vmConfig.CustomDockerfile() == nil {
+		return false, nil, ""
 	}
+	content = vmConfig.CustomDockerfile()
+	hash := hashCustomImage(content, baseImageID)
+	return true, content, fmt.Sprintf("homura-vm-ubuntu-custom:%s", hash)
+}
 
-	if fromLine == "" {
-		return fmt.Errorf("no FROM line found")
+// DumpCustomDockerfile is the client-facing entry point for HOMURA_DUMP_DOCKERFILE:
+// it loads the vm.lua config and materializes the generated custom Dockerfile,
+// logging its path, without depending on the daemon's environment. VM builds run
+// in the daemon (a separate process, possibly spawned before the var was set), so
+// call this from the invoking CLI process where the env var is guaranteed present.
+func DumpCustomDockerfile() {
+	if os.Getenv("HOMURA_DUMP_DOCKERFILE") != "1" {
+		return
 	}
-
-	// Extract image name (before any AS alias)
-	parts := strings.Fields(fromLine)
-	if len(parts) < 2 {
-		return fmt.Errorf("invalid FROM line: %s", fromLine)
+	cfg, err := LoadVMConfig()
+	if err != nil || cfg == nil {
+		return
 	}
+	dumpCustomDockerfile(cfg.CustomDockerfile())
+}
 
-	fromImage := parts[1]
-	expectedImage := strings.TrimPrefix(expectedFrom, "FROM ")
-
-	if fromImage != expectedImage {
-		return fmt.Errorf("base image version mismatch: found '%s', expected '%s'",
-			fromImage, expectedImage)
+// dumpCustomDockerfile, when HOMURA_DUMP_DOCKERFILE=1, writes the vm.lua-
+// generated custom Dockerfile to a stable temp dir (named by content hash) and
+// logs its path so the generated content can be inspected after the build. The
+// dir is intentionally not removed. No-op when content is empty or the var is
+// unset.
+func dumpCustomDockerfile(content []byte) {
+	if len(content) == 0 {
+		return
 	}
-
-	return nil
+	if os.Getenv("HOMURA_DUMP_DOCKERFILE") != "1" {
+		return
+	}
+	h := md5.Sum(content)
+	dir := filepath.Join(os.TempDir(), fmt.Sprintf("homura-custom-build-%x", h))
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		slog.Warn("Failed to create custom Dockerfile dump dir", "error", err)
+		return
+	}
+	path := filepath.Join(dir, "Dockerfile")
+	if err := os.WriteFile(path, content, 0644); err != nil {
+		slog.Warn("Failed to write custom Dockerfile dump", "error", err)
+		return
+	}
+	slog.Info("Preserved custom Dockerfile (HOMURA_DUMP_DOCKERFILE=1)", "path", path)
 }
 
 // getImageID retrieves the image ID for a given image name/tag

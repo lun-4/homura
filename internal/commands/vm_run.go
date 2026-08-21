@@ -99,6 +99,10 @@ func VMRun(args []string, shareModeStr string) error {
 		return err
 	}
 
+	// HOMURA_DUMP_DOCKERFILE=1: dump the vm.lua-generated Dockerfile in this
+	// process (the daemon may not have the env var).
+	vm.DumpCustomDockerfile()
+
 	branch, command := splitRunArgs(args)
 	if len(command) == 0 {
 		return fmt.Errorf("missing command after --")
