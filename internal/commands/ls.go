@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -53,6 +54,25 @@ func Ls() error {
 		}
 	}
 
+	entries, err := os.ReadDir(homuraDir)
+	if err != nil {
+		return fmt.Errorf("failed to list copies: %w", err)
+	}
+	for _, entry := range entries {
+		copyPath := filepath.Join(homuraDir, entry.Name())
+		if !entry.IsDir() || !git.IsGitRepo(copyPath) {
+			continue
+		}
+		cmd := exec.Command("git", "symbolic-ref", "--quiet", "--short", "HEAD")
+		cmd.Dir = copyPath
+		output, err := cmd.Output()
+		branch := strings.TrimSpace(string(output))
+		if err != nil {
+			branch = ""
+		}
+		copies = append(copies, git.Worktree{Path: copyPath, Branch: branch})
+	}
+
 	if len(copies) == 0 {
 		fmt.Println("No copies found")
 		return nil
@@ -65,7 +85,10 @@ func Ls() error {
 		if name == "" {
 			name = filepath.Base(copy.Path) + " (detached)"
 		}
-		if copy.Branch == state.DefaultBranch {
+		if copy.Branch != "" && git.BranchDirName(copy.Branch) != filepath.Base(copy.Path) {
+			name = fmt.Sprintf("%s (branch: %s)", filepath.Base(copy.Path), copy.Branch)
+		}
+		if copy.Path == git.GetCopyPath(repoRoot, state.DefaultBranch) {
 			fmt.Printf("  %s (default)\n", name)
 		} else {
 			fmt.Printf("  %s\n", name)

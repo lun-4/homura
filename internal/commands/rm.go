@@ -3,6 +3,7 @@ package commands
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/lun-4/homura/internal/config"
 	"github.com/lun-4/homura/internal/git"
@@ -36,10 +37,24 @@ func Rm(branchName string, force bool) error {
 
 	// Get worktree path
 	worktreePath := git.GetCopyPath(repoRoot, branchName)
+	if filepath.Dir(worktreePath) != git.GetHomuraDir(repoRoot) {
+		return fmt.Errorf("invalid branch name %q", branchName)
+	}
 
 	// Check if worktree exists
 	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 		return fmt.Errorf("worktree does not exist at %s", worktreePath)
+	}
+
+	info, err := os.Lstat(worktreePath)
+	if err != nil {
+		return fmt.Errorf("failed to inspect copy: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("refusing to remove non-directory copy at %s", worktreePath)
+	}
+	if git.IsGitRepo(worktreePath) && !force {
+		return fmt.Errorf("independent repository copies may contain unique commits and local files; use -f to remove %s", worktreePath)
 	}
 
 	// Check for uncommitted changes (unless force is set)
@@ -65,7 +80,11 @@ func Rm(branchName string, force bool) error {
 
 	// Remove the worktree using git worktree remove
 	fmt.Printf("Removing worktree .homura/%s/...\n", git.BranchDirName(branchName))
-	if err := git.WorktreeRemove(repoRoot, worktreePath, force); err != nil {
+	if git.IsGitRepo(worktreePath) {
+		if err := os.RemoveAll(worktreePath); err != nil {
+			return fmt.Errorf("failed to remove repository copy: %w", err)
+		}
+	} else if err := git.WorktreeRemove(repoRoot, worktreePath, force); err != nil {
 		return fmt.Errorf("failed to remove worktree: %w", err)
 	}
 

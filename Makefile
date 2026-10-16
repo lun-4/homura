@@ -30,6 +30,7 @@ build:
 	@echo "✓ test-fs source: ~/.cache/homura/src/test-fs/"
 
 test:
+	go test ./...
 	cd 9passthrough && go test -v -count=1 .
 	cd guest/9pfuse && go test -v -count=1 .
 

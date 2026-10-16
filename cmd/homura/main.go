@@ -27,12 +27,27 @@ var rootCmd = &cobra.Command{
 
 var cloneCmd = &cobra.Command{
 	Use:   "clone <branch-name> [base]",
-	Short: "Copy current repo to .homura/<branch-name>/",
-	Args:  cobra.RangeArgs(1, 2),
+	Short: "Create a worktree or independent repository copy in .homura/<branch-name>/",
+	Long: `Create a worktree by default. With --copy, copy the main repository and its
+local edits (including untracked and ignored files) with independent Git metadata.
+The .homura directory is excluded. The source repository is not modified.
+Copy mode requires a normal .git directory and rejects submodules, nested
+repositories, external Git storage, and special files such as sockets.
+Switching to another branch or base fails if Git cannot preserve the local edits.
+Independent copies require homura rm -f to remove, since even a clean copy may
+contain unique commits or ignored files.`,
+	Args: cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		base := ""
 		if len(args) > 1 {
 			base = args[1]
+		}
+		copyRepo, err := cmd.Flags().GetBool("copy")
+		if err != nil {
+			return err
+		}
+		if copyRepo {
+			return commands.CloneCopy(args[0], base)
 		}
 		return commands.Clone(args[0], base)
 	},
@@ -214,7 +229,8 @@ var ninepReqDenyCmd = &cobra.Command{
 }
 
 func init() {
-	rmCmd.Flags().BoolVarP(&forceFlag, "force", "f", false, "Force removal even with uncommitted changes")
+	cloneCmd.Flags().Bool("copy", false, "Copy the entire repository, including local edits, with independent Git metadata")
+	rmCmd.Flags().BoolVarP(&forceFlag, "force", "f", false, "Allow removal of independent copies or worktrees with uncommitted changes")
 
 	// VM command flags
 	vmCmd.PersistentFlags().StringVar(&shareModeFlag, "share-mode", "virtiofs",

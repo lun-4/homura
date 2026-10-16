@@ -258,9 +258,9 @@ func AddToGitExclude(worktreePath, pattern string) error {
 func CreateClaudeLocalFile(destPath, branchName string) error {
 	claudeLocalPath := filepath.Join(destPath, "CLAUDE.local.md")
 
-	content := `## Worktree Isolation
+	content := `## Repository Isolation
 
-This is an isolated git worktree. Stay within this directory - do not access the parent repository unless explicitly asked. If you need files outside this worktree, ask the user first.
+This is an isolated repository checkout. Stay within this directory - do not access the parent repository unless explicitly asked. If you need files outside this checkout, ask the user first.
 `
 
 	f, err := os.OpenFile(claudeLocalPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)

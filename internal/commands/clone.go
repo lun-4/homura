@@ -13,6 +13,14 @@ import (
 // that commit-ish instead of the repository's current HEAD. base is only valid
 // when creating a new branch.
 func Clone(branchName, base string) error {
+	return clone(branchName, base, false)
+}
+
+func CloneCopy(branchName, base string) error {
+	return clone(branchName, base, true)
+}
+
+func clone(branchName, base string, independent bool) error {
 	// Get current working directory
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -41,7 +49,14 @@ func Clone(branchName, base string) error {
 	}
 
 	// Check if branch already exists
-	if git.BranchExists(repoRoot, branchName) {
+	kind := "worktree"
+	if independent {
+		kind = "repository copy"
+		fmt.Printf("Copying repository to %s...\n", destPath)
+		if err := git.CopyRepository(repoRoot, destPath, branchName, base); err != nil {
+			return err
+		}
+	} else if git.BranchExists(repoRoot, branchName) {
 		if base != "" {
 			return fmt.Errorf("branch %q already exists; the base argument only applies when creating a new branch", branchName)
 		}
@@ -81,7 +96,7 @@ func Clone(branchName, base string) error {
 		return fmt.Errorf("failed to save state: %w", err)
 	}
 
-	fmt.Printf("Successfully created worktree at .homura/%s/\n", git.BranchDirName(branchName))
+	fmt.Printf("Successfully created %s at .homura/%s/\n", kind, git.BranchDirName(branchName))
 	fmt.Printf("Default branch set to '%s'\n", branchName)
 
 	return nil
