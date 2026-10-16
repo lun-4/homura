@@ -119,7 +119,7 @@ func (s *Server) Run() error {
 	slog.SetDefault(slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	// Daemon-spawned children (passt/virtiofsd/9passthrough/qemu) die with us.
-	vm.ChildProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM}
+	vm.ChildProcAttr = vm.DaemonChildProcAttr()
 	vm.ChildOutput = logFile
 
 	// Remove any stale socket, then listen.

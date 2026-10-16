@@ -578,7 +578,7 @@ func (vm *VM) Start(opts StartOptions) error {
 		vm.QEMUCmd.Stdout = ChildOutput
 		vm.QEMUCmd.Stderr = ChildOutput
 		// Daemon-spawned QEMU dies with the daemon rather than being orphaned.
-		vm.QEMUCmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGTERM}
+		vm.QEMUCmd.SysProcAttr = DaemonChildProcAttr()
 	}
 
 	// Start QEMU
