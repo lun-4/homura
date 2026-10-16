@@ -32,7 +32,12 @@ func cloneTestWrite(t *testing.T, path, content string) {
 
 func cloneTestRepo(t *testing.T) string {
 	t.Helper()
-	repo := t.TempDir()
+	// Resolve symlinks: on macOS the temp dir lives under /var -> /private/var,
+	// and git reports the resolved path.
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	cloneTestGit(t, repo, "init", "--initial-branch=main")
 	cloneTestGit(t, repo, "config", "user.name", "Homura Test")
 	cloneTestGit(t, repo, "config", "user.email", "homura@example.invalid")

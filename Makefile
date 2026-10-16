@@ -1,6 +1,13 @@
 .PHONY: all build 9p clean install
 
+UNAME_S := $(shell uname -s)
+
+# The 9p/VM components are Linux-only; on macOS only the worktree/copy CLI is built.
+ifeq ($(UNAME_S),Darwin)
+all: build
+else
 all: build 9p
+endif
 
 build:
 	go build -o homura ./cmd/homura
