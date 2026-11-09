@@ -65,6 +65,16 @@ func clone(branchName, base string, independent bool) error {
 		if err := git.WorktreeAddExisting(repoRoot, destPath, branchName); err != nil {
 			return fmt.Errorf("failed to create worktree: %w", err)
 		}
+	} else if remoteRef, err := git.RemoteBranch(repoRoot, branchName); err != nil {
+		return err
+	} else if remoteRef != "" {
+		if base != "" {
+			return fmt.Errorf("branch %q exists as %s; the base argument only applies when creating a new branch", branchName, remoteRef)
+		}
+		fmt.Printf("Creating worktree for branch '%s' tracking '%s' at %s...\n", branchName, remoteRef, destPath)
+		if err := git.WorktreeAddTracking(repoRoot, destPath, branchName, remoteRef); err != nil {
+			return fmt.Errorf("failed to create worktree: %w", err)
+		}
 	} else {
 		// Create new branch with worktree
 		if base != "" {

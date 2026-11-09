@@ -208,6 +208,50 @@ func BranchExists(repoPath, branchName string) bool {
 	return cmd.Run() == nil
 }
 
+// RemoteBranch finds a remote-tracking branch named branchName that is
+// available locally, without fetching. It returns "<remote>/<branchName>" when
+// exactly one remote has it, "" when none do, and an error when several do.
+func RemoteBranch(repoPath, branchName string) (string, error) {
+	cmd := exec.Command("git", "remote")
+	cmd.Dir = repoPath
+	slog.Info("running git command", "cmd", "git", "args", cmd.Args[1:], "dir", repoPath)
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to list remotes: %w", err)
+	}
+	var matches []string
+	for _, remote := range strings.Fields(string(output)) {
+		ref := remote + "/" + branchName
+		check := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/remotes/"+ref)
+		check.Dir = repoPath
+		if check.Run() == nil {
+			matches = append(matches, ref)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", nil
+	case 1:
+		return matches[0], nil
+	default:
+		return "", fmt.Errorf("branch %q exists on multiple remotes (%s); create it locally first, e.g. git branch --track %s %s",
+			branchName, strings.Join(matches, ", "), branchName, matches[0])
+	}
+}
+
+// WorktreeAddTracking creates a worktree with a new local branch that tracks
+// the given remote-tracking branch (e.g. "origin/feat").
+func WorktreeAddTracking(repoPath, worktreePath, branchName, remoteRef string) error {
+	cmd := exec.Command("git", "worktree", "add", "--track", "-b", branchName, worktreePath, remoteRef)
+	cmd.Dir = repoPath
+	slog.Info("running git command", "cmd", "git", "args", cmd.Args[1:], "dir", repoPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to create worktree: %s: %w", string(output), err)
+	}
+	return nil
+}
+
 // AddToGitExclude adds a pattern to $GIT_DIR/info/exclude for the given worktree.
 // This uses the per-worktree exclude file so patterns don't affect other worktrees
 // or get committed to the repository.

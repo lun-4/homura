@@ -24,6 +24,8 @@ mv ./homura ~/.local/bin
 ```bash
 # Create a worktree at .homura/<branch-name>/ and set as default.
 # If the branch already exists, checks it out; otherwise creates a new branch.
+# If it only exists as a remote-tracking branch (e.g. origin/<name>, no fetch is
+# done), creates a local branch tracking it; errors if several remotes have it.
 # Optional [base] forks a NEW branch from that commit-ish (branch/tag/commit)
 # instead of current HEAD; it errors if the branch already exists.
 homura clone <branch-name> [base]
@@ -572,7 +574,7 @@ Relevant files: `internal/vm/snapshot.go`
 - `internal/git/git.go`: Git operations (status checks, branch checkout, path utilities)
 
 ### Core Behaviors
-- `clone` runs `git worktree add` for the branch and sets it as default. If the branch already exists, it checks it out (`git worktree add <path> <branch>`); otherwise it creates a new branch (`git worktree add -b <branch> <path>`). Errors if `.homura/<branch>/` already exists on disk, or if git refuses because the branch is already checked out in another worktree. Also drops a `CLAUDE.local.md` into the worktree and adds it to the worktree's `.git/info/exclude`
+- `clone` runs `git worktree add` for the branch and sets it as default. If the branch already exists, it checks it out (`git worktree add <path> <branch>`); if exactly one remote has an already-fetched `<remote>/<branch>`, it creates a local tracking branch (`git worktree add --track -b <branch> <path> <remote>/<branch>`), erroring when several remotes match; otherwise it creates a new branch (`git worktree add -b <branch> <path>`). Errors if `.homura/<branch>/` already exists on disk, or if git refuses because the branch is already checked out in another worktree. Also drops a `CLAUDE.local.md` into the worktree and adds it to the worktree's `.git/info/exclude`
 - `sh` spawns `$SHELL` in the worktree directory (defaults to `/bin/sh`)
 - `rm` runs `git worktree remove`; it prevents removal of worktrees with uncommitted changes unless `-f` is used
 - All commands use slog for structured logging to stderr

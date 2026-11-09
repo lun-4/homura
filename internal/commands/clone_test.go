@@ -242,3 +242,60 @@ func TestRmRejectsUnsafeCopyPaths(t *testing.T) {
 		t.Fatalf("unsafe removal changed symlink: %v", err)
 	}
 }
+
+func TestCloneRemoteBranch(t *testing.T) {
+	repo := cloneTestRepo(t)
+	for _, remote := range []string{"origin", "upstream"} {
+		bare := t.TempDir()
+		cloneTestGit(t, bare, "init", "--bare")
+		cloneTestGit(t, repo, "remote", "add", remote, bare)
+	}
+	cloneTestGit(t, repo, "checkout", "-b", "feat/remote")
+	cloneTestWrite(t, filepath.Join(repo, "tracked"), "remote work\n")
+	cloneTestGit(t, repo, "commit", "-am", "remote work")
+	remoteHead := cloneTestGit(t, repo, "rev-parse", "HEAD")
+	cloneTestGit(t, repo, "push", "origin", "feat/remote", "feat/remote:dup")
+	cloneTestGit(t, repo, "push", "upstream", "feat/remote:dup")
+	cloneTestGit(t, repo, "checkout", "main")
+	cloneTestGit(t, repo, "branch", "-D", "feat/remote")
+	mainHead := cloneTestGit(t, repo, "rev-parse", "HEAD")
+
+	if err := Clone("feat/remote", "HEAD"); err == nil || !strings.Contains(err.Error(), "origin/feat/remote") {
+		t.Fatalf("Clone with base over remote branch = %v; want error", err)
+	}
+	for name, clone := range map[string]func(string, string) error{"worktree": Clone, "copy": CloneCopy} {
+		if err := clone("dup", ""); err == nil || !strings.Contains(err.Error(), "multiple remotes") {
+			t.Fatalf("%s: ambiguous Clone = %v; want multiple remotes error", name, err)
+		}
+		if _, err := os.Stat(filepath.Join(repo, ".homura", "dup")); !os.IsNotExist(err) {
+			t.Fatalf("%s: ambiguous clone left a directory: %v", name, err)
+		}
+	}
+	if err := Clone("feat/remote", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := CloneCopy("feat/remote-copy", ""); err != nil {
+		t.Fatal(err) // no remote match: falls back to a new branch from HEAD
+	}
+	if err := Rm("feat/remote-copy", true); err != nil {
+		t.Fatal(err)
+	}
+	cloneTestGit(t, repo, "push", "origin", "origin/feat/remote:refs/heads/feat/remote-copy")
+	cloneTestGit(t, repo, "fetch", "origin")
+	if err := CloneCopy("feat/remote-copy", ""); err != nil {
+		t.Fatal(err)
+	}
+	for dir, upstream := range map[string]string{"feat.remote": "origin/feat/remote", "feat.remote-copy": "origin/feat/remote-copy"} {
+		path := filepath.Join(repo, ".homura", dir)
+		if got := cloneTestGit(t, path, "rev-parse", "HEAD"); got != remoteHead {
+			t.Errorf("%s HEAD = %q, want remote %q", dir, got, remoteHead)
+		}
+		if got := cloneTestGit(t, path, "rev-parse", "--abbrev-ref", "@{upstream}"); got != upstream {
+			t.Errorf("%s upstream = %q, want %q", dir, got, upstream)
+		}
+	}
+	if got := cloneTestGit(t, repo, "rev-parse", "HEAD"); got != mainHead {
+		t.Fatalf("parent HEAD changed: %q", got)
+	}
+	cloneTestDefault(t, repo, "feat/remote-copy")
+}

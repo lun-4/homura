@@ -82,6 +82,15 @@ func CopyRepository(repoPath, destPath, branchName, base string) (err error) {
 	if exists && base != "" {
 		return fmt.Errorf("branch %q already exists; cannot use a base", branchName)
 	}
+	remoteRef := ""
+	if !exists {
+		if remoteRef, err = RemoteBranch(repoPath, branchName); err != nil {
+			return err
+		}
+		if remoteRef != "" && base != "" {
+			return fmt.Errorf("branch %q exists as %s; cannot use a base", branchName, remoteRef)
+		}
+	}
 	if base != "" {
 		base, err = run(repoPath, "rev-parse", "--verify", "--end-of-options", base+"^{commit}")
 		if err != nil {
@@ -131,11 +140,16 @@ func CopyRepository(repoPath, destPath, branchName, base string) (err error) {
 		return err
 	}
 	args := []string{"checkout", "--no-guess", "--no-overwrite-ignore"}
+	if remoteRef != "" {
+		args = append(args, "--track")
+	}
 	if !exists {
 		args = append(args, "-b")
 	}
 	args = append(args, branchName)
-	if base != "" {
+	if remoteRef != "" {
+		args = append(args, remoteRef)
+	} else if base != "" {
 		args = append(args, base)
 	}
 	args = append(args, "--")
